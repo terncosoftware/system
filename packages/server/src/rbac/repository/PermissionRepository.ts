@@ -68,7 +68,12 @@ export class PermissionRepository {
         return this.findById(ctx, sec, { id: idFromIri(args.iriStr) });
     }
 
-    /** @dataLayer — no checks here; RbacService enforces. Find a permission by its dot-separated key (e.g. "invoice.read"). */
+    /**
+     * @dataLayer — no checks here; RbacService enforces. Find a permission by its
+     * dot-separated key (e.g. "invoice.read") in the caller's tenant graph only:
+     * EntityQuery scans run in tenantGraph(ctx) (TRN-531), so a tenant never
+     * resolves another tenant's permission (TRN-214).
+     */
     async findByKey(
         ctx: ServerContext,
         sec: SecurityContext,
