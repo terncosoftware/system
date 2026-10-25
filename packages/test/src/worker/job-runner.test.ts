@@ -13,6 +13,7 @@
  *   - requires_role gating: run stays pending when this runner does not hold
  *     the required role.
  *   - Handler timeout marks the run failed/retried.
+ *   - A run whose handler this process did not register stays pending.
  *
  * No arbitrary setTimeout sleeps. The injectable clock (ManualClock) is
  * advanced to make backoff timing deterministic; _tick() is invoked directly.
@@ -418,7 +419,7 @@ describe("JobRunner — SQLite (in-memory)", () => {
 
     // ── Unregistered handler ───────────────────────────────────────────────────
 
-    it("marks a run failed when the handler id is not registered", async () => {
+    it("leaves a run pending when its handler id is not registered in this process", async () => {
         const scheduledFor = new Date(NOW.getTime() - 1_000);
         const runId = await insertPendingRun(knex, {
             jobId: "job.unregistered",
@@ -428,13 +429,15 @@ describe("JobRunner — SQLite (in-memory)", () => {
             maxAttempts: 1,
         });
 
-        // No handler registered — the lookup must fail gracefully.
+        // Another process may register this handler: this runner must not claim
+        // the run, let alone fail it.
         const runner = makeRunner(knex, handlers, clock);
         await runTick(runner);
 
         const row = await getRunById(knex, runId);
-        expect(row.status).toBe("dead");
-        expect(row.error).toMatch(/no handler registered/i);
+        expect(row.status).toBe("pending");
+        expect(row.claimed_by).toBeNull();
+        expect(row.error).toBeNull();
     });
 
     // ── Run not yet due ────────────────────────────────────────────────────────

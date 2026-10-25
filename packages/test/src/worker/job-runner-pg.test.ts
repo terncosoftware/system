@@ -16,6 +16,10 @@
  *      (spamming logs, leaving the run stuck `running`). Fix: the retry insert is
  *      idempotent (onConflict.ignore), exactly like the scheduler's.
  *
+ * A third case: runners that hold the same role but registered different
+ * handlers each claim only the runs they can execute, so neither fails the
+ * other's jobs with "no handler registered".
+ *
  * Real infra only: a single-connection pg pool is what makes the deadlock real —
  * SQLite serialises on one connection and cannot exhibit it. Each test isolates by
  * truncating the sys_job/sys_job_run tables it touches; it never resets the schema.
@@ -52,13 +56,13 @@ function runTick(runner: JobRunner): Promise<void> {
 
 async function insertJob(
     knex: Knex,
-    opts: { jobId: string; handler: string; maxAttempts?: number },
+    opts: { jobId: string; handler: string; maxAttempts?: number; requiresRole?: string },
 ): Promise<void> {
     await knex("sys_job").insert({
         id: opts.jobId,
         schedule: JSON.stringify({ every: "PT30S" }),
         handler: opts.handler,
-        requires_role: null,
+        requires_role: opts.requiresRole ?? null,
         enabled: true,
         next_run_at: new Date(Date.now() + 30_000),
         max_attempts: opts.maxAttempts ?? 3,
@@ -114,10 +118,17 @@ describe.skipIf(!process.env.SYS_PG_URL)("JobRunner — real Postgres (TRN-403)"
         // Isolate: clear only this suite's rows (runs before jobs for the FK).
         await knex("sys_job_run")
             .whereIn("job_id", (q) =>
-                q.select("id").from("sys_job").where("id", "like", "trn403.%"),
+                q
+                    .select("id")
+                    .from("sys_job")
+                    .where("id", "like", "trn403.%")
+                    .orWhere("id", "like", "shared-role.%"),
             )
             .del();
-        await knex("sys_job").where("id", "like", "trn403.%").del();
+        await knex("sys_job")
+            .where("id", "like", "trn403.%")
+            .orWhere("id", "like", "shared-role.%")
+            .del();
     });
 
     it("runs a module:// handler that does its OWN pooled DB work and records it succeeded", async () => {
@@ -149,8 +160,8 @@ describe.skipIf(!process.env.SYS_PG_URL)("JobRunner — real Postgres (TRN-403)"
     }, 15_000);
 
     it("idempotently absorbs a colliding retry insert instead of crashing the tick", async () => {
-        // Two runs of the SAME attempt that both fail (here: unregistered, an
-        // immediate failure) in the same backoff window compute the SAME retry
+        // Two runs of the SAME attempt that both fail (here: a handler that
+        // throws at once) in the same backoff window compute the SAME retry
         // slot (job_id, scheduled_for, attempt). The second insert must be a
         // no-op, not a duplicate-key throw that aborts the tick.
         // Pin "now" AFTER the rows' scheduled_for so both are claimable, and so
@@ -159,7 +170,7 @@ describe.skipIf(!process.env.SYS_PG_URL)("JobRunner — real Postgres (TRN-403)"
         const due = new Date(pinnedNow.getTime() - 1_000);
         await insertJob(knex, {
             jobId: "trn403.collide",
-            handler: "not.registered",
+            handler: "trn403.throws",
             maxAttempts: 3,
         });
         const run1 = await insertPendingRun(knex, {
@@ -175,9 +186,13 @@ describe.skipIf(!process.env.SYS_PG_URL)("JobRunner — real Postgres (TRN-403)"
             attempt: 1,
         });
 
+        const handlers = new JobHandlers();
+        handlers.registerJob("trn403.throws", async () => {
+            throw new Error("handler failed");
+        });
         const runner = new JobRunner({
             context: new FlowContext(),
-            handlers: new JobHandlers(),
+            handlers,
             now: () => pinnedNow,
             backoffMaxMs: 5_000,
             tickIntervalMs: 1_000_000,
@@ -199,5 +214,76 @@ describe.skipIf(!process.env.SYS_PG_URL)("JobRunner — real Postgres (TRN-403)"
             .select("*");
         expect(retries).toHaveLength(1);
         expect(retries[0].status).toBe("pending");
+    }, 15_000);
+
+    it("runs each job only on the runner that registered its handler when both hold the role", async () => {
+        // Both runners hold the job's role (the mis-configuration that hit tern:
+        // several workers asking for one scheduler role). Each registered a
+        // different handler set, so each must claim only its own runs.
+        const role = "shared-role.scheduler";
+        const due = new Date(Date.now() - 1_000);
+        const ran: { runner: string; job: string }[] = [];
+
+        const makeRunner = (name: string, jobIds: string[]): JobRunner => {
+            const handlers = new JobHandlers();
+            for (const jobId of jobIds) {
+                handlers.registerJob(jobId, async () => {
+                    ran.push({ runner: name, job: jobId });
+                });
+            }
+            return new JobRunner({
+                context: new FlowContext(),
+                handlers,
+                holdsRole: (r) => r === role,
+                timeoutMs: 5_000,
+                tickIntervalMs: 1_000_000,
+            });
+        };
+
+        const jobsA = ["shared-role.a1", "shared-role.a2"];
+        const jobsB = ["shared-role.b1", "shared-role.b2"];
+        const runIds = new Map<string, string>();
+        for (const jobId of [...jobsA, ...jobsB]) {
+            await insertJob(knex, { jobId, handler: jobId, maxAttempts: 3, requiresRole: role });
+            runIds.set(jobId, await insertPendingRun(knex, { jobId, scheduledFor: due }));
+        }
+
+        const runnerA = makeRunner("a", jobsA);
+        const runnerB = makeRunner("b", jobsB);
+
+        // A ticks first with every run due: it must leave B's runs pending.
+        await runTick(runnerA);
+        const afterA = await knex("sys_job_run")
+            .whereIn("job_id", jobsB)
+            .select("status", "claimed_by", "error");
+        expect(afterA).toHaveLength(2);
+        for (const row of afterA) {
+            expect(row.status).toBe("pending");
+            expect(row.claimed_by).toBeNull();
+            expect(row.error).toBeNull();
+        }
+
+        await runTick(runnerB);
+        // Further ticks find nothing left to run.
+        await runTick(runnerA);
+        await runTick(runnerB);
+
+        expect([...ran].sort((x, y) => x.job.localeCompare(y.job))).toEqual([
+            { runner: "a", job: "shared-role.a1" },
+            { runner: "a", job: "shared-role.a2" },
+            { runner: "b", job: "shared-role.b1" },
+            { runner: "b", job: "shared-role.b2" },
+        ]);
+
+        const rows = await knex("sys_job_run")
+            .whereIn("job_id", [...jobsA, ...jobsB])
+            .select("id", "status", "error");
+        // No retries were queued: one run per job, each succeeded.
+        expect(rows).toHaveLength(4);
+        for (const row of rows) {
+            expect([...runIds.values()]).toContain(row.id);
+            expect(row.status).toBe("succeeded");
+            expect(row.error).toBeNull();
+        }
     }, 15_000);
 });
