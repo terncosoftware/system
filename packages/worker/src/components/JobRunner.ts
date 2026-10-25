@@ -10,6 +10,10 @@
  * Claim tick:
  *   1. SELECT pending sys_job_run rows with scheduled_for <= now, oldest first,
  *      joined to sys_job to read requires_role, handler, max_attempts.
+ *      — Only runs this process can resolve: the job handler is a `module://`
+ *        URI or an id registered in this process's JobHandlers. A run whose
+ *        handler only another process registered is never claimed here, so it
+ *        cannot be failed with "no handler registered".
  *      — FOR UPDATE SKIP LOCKED on Postgres; plain SELECT on SQLite.
  *   2. Within one transaction, mark claimable rows running + set claimed_by
  *      + started_at.
@@ -177,6 +181,10 @@ export class JobRunner extends FlowComponent {
      * On Postgres: FOR UPDATE SKIP LOCKED ensures concurrent runners never
      * double-claim. On SQLite: serialised writers make a plain SELECT safe.
      *
+     * The handler filter is part of the query, so runs this process cannot
+     * resolve never take a slot in the batch (or a row lock) and so never
+     * starve the runs it can.
+     *
      * requires_role gating is applied in-process after fetching candidates:
      * runs whose job requires a role this process does not hold are left
      * untouched (status stays pending) so the holding process can claim them.
@@ -200,6 +208,12 @@ export class JobRunner extends FlowComponent {
                 )
                 .where("r.status", "pending")
                 .where("r.scheduled_for", "<=", now)
+                .where((q) => {
+                    q.where("j.handler", "like", "module://%").orWhereIn(
+                        "j.handler",
+                        this._handlers.ids(),
+                    );
+                })
                 .orderBy("r.scheduled_for", "asc")
                 .limit(this._batchSize);
 

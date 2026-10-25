@@ -196,7 +196,9 @@ Three FlowComponents, in the existing component idiom (ports, `onInit`, `step`,
   thundering backlog.
 - **JobRunner** — claims pending runs, resolves each job's handler reference,
   invokes it, and records the outcome with retry and dead-lettering. Respects
-  `requires_role` so role-bound work stays on the elected holder.
+  `requires_role` so role-bound work stays on the elected holder, and claims
+  only runs whose handler is a `module://` URI or an id registered in its own
+  process, so a worker never takes (and fails) a job another worker handles.
 
 A worker's `app.ts` adds these three and registers its handlers; `main.ts`
 already has the store, the `ctx`, and `runMigrations` — no new connections, no

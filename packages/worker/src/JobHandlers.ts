@@ -89,4 +89,13 @@ export class JobHandlers {
     lookup(id: string): JobHandler | undefined {
         return this._handlers.get(id);
     }
+
+    /**
+     * The ids of every registered handler. JobRunner claims only runs whose job
+     * handler is one of these (or a `module://` URI), so a process never takes
+     * a run that only another process can execute.
+     */
+    ids(): string[] {
+        return [...this._handlers.keys()];
+    }
 }
