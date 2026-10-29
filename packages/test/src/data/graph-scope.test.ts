@@ -28,9 +28,8 @@ import {
     createTestDataContext,
 } from "../assertEmptyStore.js";
 
-// Same resolution as the other real-infrastructure suites: the env var wins,
-// else the shared dev/CI default.
-const PG_URL = process.env.SYS_PG_URL ?? "postgresql://sys:sys@localhost:5432/sys";
+// Postgres-only: skipped (and reported as skipped) when SYS_PG_URL is unset.
+const PG_URL = process.env.SYS_PG_URL ?? "";
 
 function iri(value: string): IRI {
     return { value } as IRI;
@@ -66,7 +65,7 @@ async function scopeError(read: Promise<unknown>): Promise<string> {
     throw new Error("expected an unscoped read to throw, but it resolved");
 }
 
-describe("TripleStore graph scope (real Postgres)", () => {
+describe.skipIf(PG_URL === "")("TripleStore graph scope (real Postgres)", () => {
     let knex: Knex | null = null;
     let trx: Knex.Transaction | null = null;
     let store: TripleStore;

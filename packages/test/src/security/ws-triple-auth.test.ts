@@ -70,7 +70,9 @@ import { TEST_CIPHER } from "../auth/testCipher.js";
 
 // ── Infra: real Postgres only (no SQLite — repo law + PO bar) ────────────────
 
-const PG_URL = process.env.SYS_PG_URL ?? "postgresql://sys:sys@localhost:5432/sys";
+// Postgres-only: skipped (and reported as skipped) when SYS_PG_URL is unset.
+const PG_URL = process.env.SYS_PG_URL ?? "";
+const describePg = describe.skipIf(PG_URL === "");
 
 function pgContext(): Promise<Knex> {
     const url = new URL(PG_URL);
@@ -118,7 +120,7 @@ function connectWs(url: string, headers: Record<string, string>): Promise<Connec
 
 const ORIGIN = "http://localhost:5173";
 
-describe("TRN-527 — WS triple.* store access is authenticated + superuser-gated", () => {
+describePg("WS triple.* store access is authenticated + superuser-gated (real Postgres)", () => {
     // knex/trx are null until their setup hook succeeds, and the teardown hooks
     // guard on that: a failed connection or seed then reports the real setup
     // error instead of cascading a TypeError out of afterEach/afterAll.

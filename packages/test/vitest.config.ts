@@ -29,6 +29,11 @@ export default defineConfig({
         globals: true,
         environment: "node",
         include: ["packages/test/src/**/*.test.ts"],
+        // Each worker gets its own Postgres database when SYS_PG_URL is set, and
+        // the run ends with a count of the Postgres-leg tests that ran.
+        globalSetup: [path.resolve(__dirname, "src/postgres/global-setup.ts")],
+        setupFiles: [path.resolve(__dirname, "src/postgres/worker-setup.ts")],
+        reporters: ["default", path.resolve(__dirname, "src/postgres/reporter.ts")],
         coverage: {
             provider: "v8",
             enabled: true,

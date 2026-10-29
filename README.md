@@ -72,7 +72,7 @@ yarn tail
 
 ## Testing
 
-Run the full test suite (SQLite only, no Postgres required):
+Run the full test suite (SQLite only, no Postgres required; the run ends with a notice that the Postgres legs were skipped):
 
 ```bash
 yarn test
@@ -89,10 +89,10 @@ yarn test:watch
 All database tests run against SQLite by default. To also run each suite against Postgres, set `SYS_PG_URL`:
 
 ```bash
-SYS_POSTGRES_URL=postgres://user:pass@localhost:5432/mydb yarn test
+SYS_PG_URL=postgres://user:pass@localhost:5432/mydb yarn test
 ```
 
-Each suite runs inside a rolled-back transaction, so no cleanup is needed between runs.
+Each vitest worker runs its Postgres legs in its own database, `mydb_w1`, `mydb_w2` and so on, created on the same server and dropped when the run ends. The role in `SYS_PG_URL` needs `CREATEDB`. Two runs at once need different `mydb` names. The run ends with a count of the Postgres-leg tests that passed, failed and skipped. CI runs every Postgres leg and fails if none passed.
 
 > **Important:** After editing any package's TypeScript source, rebuild its `dist/` before running tests — Vitest loads compiled output, not the raw TypeScript.
 >

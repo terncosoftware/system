@@ -49,16 +49,10 @@ jobs:
     permissions:
       contents: read
 
-    # Real Postgres for the Postgres-only suites (repo law: integration tests
-    # hit real infra). The security suite (packages/test/src/security) connects
-    # to postgresql://sys:sys@localhost:5432/sys — its SYS_PG_URL dev default —
-    # so the service credentials must stay in sync with that URL.
-    #
-    # SYS_PG_URL is deliberately NOT exported on the test step: doing so would
-    # switch every dual-engine suite's Postgres leg on, and those suites
-    # currently collide when vitest runs them in parallel against one shared
-    # database (pre-existing debt, tracked as TRN-538). Scope: security suite
-    # only, until TRN-538 isolates the dual-engine suites per worker.
+    # Real Postgres for every suite's Postgres leg (repo law: integration tests
+    # hit real infra). The test harness gives each vitest worker its own
+    # database on this server (packages/test/src/postgres), so suites running
+    # in parallel never share tables.
     services:
       postgres:
         image: postgres:16-alpine
@@ -143,12 +137,22 @@ jobs:
           echo ""
           exit 1
 
-      - name: Run test suite
-        # No SYS_PG_URL here — see the postgres service comment above. The
-        # security suite reaches the service through its built-in default URL.
+      - name: Run test suite (SQLite + real Postgres)
+        # The run must end with the harness's Postgres count, with at least one
+        # passed test; a run whose Postgres legs all skipped fails here.
         env:
+          SYS_PG_URL: postgresql://sys:sys@localhost:5432/sys
           SYS_REDIS_URL: redis://localhost:6379
-        run: yarn test
+        run: |
+          set -euo pipefail
+          yarn test 2>&1 | tee test-output.log
+          summary=$(sed 's/\x1b\[[0-9;]*m//g' test-output.log | grep -E '^Postgres legs: [1-9][0-9]* passed' || true)
+          if [ -z "${summary}" ]; then
+            echo "::error::No Postgres-leg tests passed. Check that SYS_PG_URL reaches the postgres service."
+            exit 1
+          fi
+          echo "::notice title=Postgres legs::${summary}"
+          echo "${summary}" >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Run dashboards suite
         run: yarn workspace @terncosoftware/dashboards test
