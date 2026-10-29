@@ -1,3 +1,6 @@
+# SAMPLE ONLY, not a deployable overlay. The hosts and AUTH_BASE_URL are
+# example.com placeholders, the images track `latest`, and several listed files
+# do not exist, so it does not render. Products deploy from their own repos.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
