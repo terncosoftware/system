@@ -16,9 +16,10 @@
  *      (spamming logs, leaving the run stuck `running`). Fix: the retry insert is
  *      idempotent (onConflict.ignore), exactly like the scheduler's.
  *
- * A third case: runners that hold the same role but registered different
+ * Claim filtering: runners that hold the same role but registered different
  * handlers each claim only the runs they can execute, so neither fails the
- * other's jobs with "no handler registered".
+ * other's jobs with "no handler registered". Runs a runner cannot execute (an
+ * unregistered handler or an unheld role) never fill its claim batch.
  *
  * Real infra only: a single-connection pg pool is what makes the deadlock real —
  * SQLite serialises on one connection and cannot exhibit it. Each test isolates by
@@ -122,12 +123,14 @@ describe.skipIf(!process.env.SYS_PG_URL)("JobRunner — real Postgres (TRN-403)"
                     .select("id")
                     .from("sys_job")
                     .where("id", "like", "trn403.%")
-                    .orWhere("id", "like", "shared-role.%"),
+                    .orWhere("id", "like", "shared-role.%")
+                    .orWhere("id", "like", "role-gate.%"),
             )
             .del();
         await knex("sys_job")
             .where("id", "like", "trn403.%")
             .orWhere("id", "like", "shared-role.%")
+            .orWhere("id", "like", "role-gate.%")
             .del();
     });
 
@@ -221,7 +224,6 @@ describe.skipIf(!process.env.SYS_PG_URL)("JobRunner — real Postgres (TRN-403)"
         // several workers asking for one scheduler role). Each registered a
         // different handler set, so each must claim only its own runs.
         const role = "shared-role.scheduler";
-        const due = new Date(Date.now() - 1_000);
         const ran: { runner: string; job: string }[] = [];
 
         const makeRunner = (name: string, jobIds: string[]): JobRunner => {
@@ -236,23 +238,30 @@ describe.skipIf(!process.env.SYS_PG_URL)("JobRunner — real Postgres (TRN-403)"
                 handlers,
                 holdsRole: (r) => r === role,
                 timeoutMs: 5_000,
+                batchSize: 2,
                 tickIntervalMs: 1_000_000,
             });
         };
 
+        // B's runs are the oldest, so a claim that did not filter on handler
+        // would fill A's batch of two with runs A cannot execute.
         const jobsA = ["shared-role.a1", "shared-role.a2"];
         const jobsB = ["shared-role.b1", "shared-role.b2"];
         const runIds = new Map<string, string>();
-        for (const jobId of [...jobsA, ...jobsB]) {
+        const oldest = Date.now() - 10_000;
+        for (const [i, jobId] of [...jobsB, ...jobsA].entries()) {
             await insertJob(knex, { jobId, handler: jobId, maxAttempts: 3, requiresRole: role });
-            runIds.set(jobId, await insertPendingRun(knex, { jobId, scheduledFor: due }));
+            const scheduledFor = new Date(oldest + i * 1_000);
+            runIds.set(jobId, await insertPendingRun(knex, { jobId, scheduledFor }));
         }
 
         const runnerA = makeRunner("a", jobsA);
         const runnerB = makeRunner("b", jobsB);
 
-        // A ticks first with every run due: it must leave B's runs pending.
+        // A ticks first with every run due: one tick runs both of its own runs
+        // and leaves B's pending.
         await runTick(runnerA);
+        expect(ran.filter((r) => r.runner === "a").map((r) => r.job)).toEqual(jobsA);
         const afterA = await knex("sys_job_run")
             .whereIn("job_id", jobsB)
             .select("status", "claimed_by", "error");
@@ -285,5 +294,49 @@ describe.skipIf(!process.env.SYS_PG_URL)("JobRunner — real Postgres (TRN-403)"
             expect(row.status).toBe("succeeded");
             expect(row.error).toBeNull();
         }
+    }, 15_000);
+
+    it("does not let runs for a role it does not hold fill its claim batch", async () => {
+        // The oldest due run needs a role no runner here holds. A batch of one
+        // must skip it in the query and claim the newer unbound run instead.
+        const ran: string[] = [];
+        const handlers = new JobHandlers();
+        for (const jobId of ["role-gate.bound", "role-gate.free"]) {
+            handlers.registerJob(jobId, async () => {
+                ran.push(jobId);
+            });
+        }
+        await insertJob(knex, {
+            jobId: "role-gate.bound",
+            handler: "role-gate.bound",
+            requiresRole: "role-gate.elsewhere",
+        });
+        await insertJob(knex, { jobId: "role-gate.free", handler: "role-gate.free" });
+        const boundRun = await insertPendingRun(knex, {
+            jobId: "role-gate.bound",
+            scheduledFor: new Date(Date.now() - 10_000),
+        });
+        await insertPendingRun(knex, {
+            jobId: "role-gate.free",
+            scheduledFor: new Date(Date.now() - 1_000),
+        });
+
+        const runner = new JobRunner({
+            context: new FlowContext(),
+            handlers,
+            holdsRole: () => false,
+            batchSize: 1,
+            timeoutMs: 5_000,
+            tickIntervalMs: 1_000_000,
+        });
+        await runTick(runner);
+
+        expect(ran).toEqual(["role-gate.free"]);
+        const bound = await knex("sys_job_run")
+            .where({ id: boundRun })
+            .first("status", "claimed_by", "error");
+        expect(bound.status).toBe("pending");
+        expect(bound.claimed_by).toBeNull();
+        expect(bound.error).toBeNull();
     }, 15_000);
 });

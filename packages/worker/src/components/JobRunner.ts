@@ -14,11 +14,11 @@
  *        URI or an id registered in this process's JobHandlers. A run whose
  *        handler only another process registered is never claimed here, so it
  *        cannot be failed with "no handler registered".
+ *      — Only runs whose job requires_role is null or a role this process
+ *        holds (holdsRole); the rest stay pending for the holder.
  *      — FOR UPDATE SKIP LOCKED on Postgres; plain SELECT on SQLite.
- *   2. Within one transaction, mark claimable rows running + set claimed_by
- *      + started_at.
- *      — requires_role gating: only claim runs whose job requires_role is null
- *        OR holdsRole(requires_role) is true; leave the rest pending.
+ *   2. Within the same transaction, mark the selected rows running + set
+ *      claimed_by + started_at.
  *
  * Execute:
  *   - Resolve the handler (module:// URI → resolveModuleRef; otherwise look up
@@ -181,13 +181,10 @@ export class JobRunner extends FlowComponent {
      * On Postgres: FOR UPDATE SKIP LOCKED ensures concurrent runners never
      * double-claim. On SQLite: serialised writers make a plain SELECT safe.
      *
-     * The handler filter is part of the query, so runs this process cannot
-     * resolve never take a slot in the batch (or a row lock) and so never
-     * starve the runs it can.
-     *
-     * requires_role gating is applied in-process after fetching candidates:
-     * runs whose job requires a role this process does not hold are left
-     * untouched (status stays pending) so the holding process can claim them.
+     * The handler and role filters are part of the query, so a run this
+     * process cannot resolve, or whose role it does not hold, never takes a
+     * slot in the batch or a row lock. It stays pending for the process that
+     * can run it, and it never starves the runs this process can.
      */
     private async _claim(now: Date): Promise<ClaimCandidate[]> {
         const isPg = _isPgClient(this._knex);
@@ -195,6 +192,7 @@ export class JobRunner extends FlowComponent {
         const claimed: ClaimCandidate[] = [];
 
         await this._knex.transaction(async (trx) => {
+            const heldRoles = await this._heldRoles(trx);
             let query = trx("sys_job_run as r")
                 .join("sys_job as j", "r.job_id", "j.id")
                 .select<ClaimCandidate[]>(
@@ -214,6 +212,9 @@ export class JobRunner extends FlowComponent {
                         this._handlers.ids(),
                     );
                 })
+                .where((q) => {
+                    q.whereNull("j.requires_role").orWhereIn("j.requires_role", heldRoles);
+                })
                 .orderBy("r.scheduled_for", "asc")
                 .limit(this._batchSize);
 
@@ -222,25 +223,36 @@ export class JobRunner extends FlowComponent {
             }
 
             const candidates = await query;
+            if (candidates.length === 0) {
+                return;
+            }
 
-            for (const candidate of candidates) {
-                // Gate on role: leave untouched if this runner does not hold
-                // the required role. Another runner (the holder) will claim it.
-                if (candidate.requires_role !== null && !this._holdsRole(candidate.requires_role)) {
-                    continue;
-                }
-
-                await trx("sys_job_run").where({ id: candidate.run_id }).update({
+            await trx("sys_job_run")
+                .whereIn(
+                    "id",
+                    candidates.map((candidate) => candidate.run_id),
+                )
+                .update({
                     status: "running",
                     claimed_by: runnerId,
                     started_at: now,
                 });
-
-                claimed.push(candidate);
-            }
+            claimed.push(...candidates);
         });
 
         return claimed;
+    }
+
+    /**
+     * The roles named by any job that this process currently holds. Read from
+     * sys_job (one row per job, not per run) so the claim query can filter on
+     * them in SQL.
+     */
+    private async _heldRoles(trx: Knex.Transaction): Promise<string[]> {
+        const rows: { requires_role: string }[] = await trx("sys_job")
+            .distinct("requires_role")
+            .whereNotNull("requires_role");
+        return rows.map((row) => row.requires_role).filter((role) => this._holdsRole(role));
     }
 
     // ── Execute ───────────────────────────────────────────────────────────────
