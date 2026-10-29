@@ -11,6 +11,7 @@ import {
     upConcurrently as migrate005Concurrently,
     type PgSession,
 } from "./migrations/005_nodes_value_index.js";
+import { up as migrate006 } from "./migrations/006_statement_timestamps.js";
 import { C, T } from "./schema.js";
 
 const log = getLog("sys:data:migrate");
@@ -64,6 +65,17 @@ async function hasColumns(knex: Knex, table: string, columns: readonly string[])
     return true;
 }
 
+/** SQLite already stamps per statement; on Postgres, read the installed trigger function. */
+async function statementTimestampsPresent(knex: Knex): Promise<boolean> {
+    if (!isPg(knex)) {
+        return true;
+    }
+    const row = await knex("pg_proc")
+        .where({ proname: "tern_edge_timestamps" })
+        .first<{ prosrc: string } | undefined>("prosrc");
+    return row?.prosrc.includes("statement_timestamp()") ?? false;
+}
+
 const DATA_MIGRATIONS: readonly DataMigration[] = [
     {
         name: "001_init",
@@ -98,6 +110,11 @@ const DATA_MIGRATIONS: readonly DataMigration[] = [
         upConcurrently: migrate005Concurrently,
         isPresent: async (knex) =>
             (await hasTables(knex, [T.nodes])) && (await hasNodesValueIndex(knex, isPg(knex))),
+    },
+    {
+        name: "006_statement_timestamps",
+        up: migrate006,
+        isPresent: statementTimestampsPresent,
     },
 ];
 
