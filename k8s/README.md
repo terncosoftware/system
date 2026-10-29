@@ -1,6 +1,6 @@
 # Tern Kubernetes Configuration
 
-Kustomize-based k8s manifests for **local**, **staging**, and **prod** deployments.
+Kustomize-based k8s manifests for **local** and **staging** deployments, plus a **prod** sample.
 
 ```
 k8s/
@@ -8,8 +8,10 @@ k8s/
 └── overlays/
     ├── local/                SQLite + in-process secrets (placeholder OAuth)
     ├── staging/              PostgreSQL + Redis PVC + Azure Key Vault
-    └── prod/                 PostgreSQL + Redis PVC + Azure Key Vault + HPA + PDB
+    └── prod/                 SAMPLE ONLY: HPA + PDB shape, placeholder hosts, not deployable
 ```
+
+`overlays/prod` is a sample of a production overlay, not something to apply: its hosts and `AUTH_BASE_URL` are `example.com` placeholders and its images track `latest`. Products that consume `system` deploy from their own repos.
 
 ## Secrets Architecture
 
@@ -17,9 +19,8 @@ k8s/
 |-------------|-------------------|
 | **local** | k8s Secrets (placeholder values — safe to commit) |
 | **staging** | Azure Key Vault (`tern-staging`) — vault URI only in k8s |
-| **prod** | Azure Key Vault (`tern-prod`) — vault URI only in k8s |
 
-In staging/prod the server pod uses **Azure Workload Identity** — a federated service-account token — so no secret credentials are ever stored in k8s. The only k8s ConfigMap value needed is `AZURE_KEY_VAULT_URI`.
+In staging the server pod uses **Azure Workload Identity** — a federated service-account token — so no secret credentials are ever stored in k8s. The only k8s ConfigMap value needed is `AZURE_KEY_VAULT_URI`.
 
 Secret keys in Azure Key Vault follow the naming convention `env-var-name → lowercase-with-hyphens`:
 
@@ -125,22 +126,6 @@ cp packages/sandbox-web/.env.local.example packages/sandbox-web/.env.local
    kubectl apply -k k8s/overlays/staging
    ```
 
-### Prod
-
-Same flow as staging with:
-- Vault name: `tern-prod`
-- Namespace: `tern-prod`
-- Overlay: `k8s/overlays/prod`
-- Update `AUTH_BASE_URL` and hostname in `overlays/prod/kustomization.yaml` and `ingress.yaml`
-
-```sh
-kubectl create namespace tern-prod
-kubectl create secret generic postgres-secret \
-  --namespace tern-prod \
-  --from-literal=POSTGRES_PASSWORD=<strong-password>
-kubectl apply -k k8s/overlays/prod
-```
-
 ## Image Tags
 
 CI builds and pushes on every merge to `main`:
@@ -150,13 +135,13 @@ CI builds and pushes on every merge to `main`:
 | Server | `ghcr.io/<owner>/system-server:latest` |
 | Web | `ghcr.io/<owner>/system-web:latest` |
 
-Pin to a specific SHA in production by updating `images[].newTag` in the overlay's `kustomization.yaml`.
+Pin to a specific SHA by updating `images[].newTag` in the overlay's `kustomization.yaml`.
 
 ## Updating a deployment
 
 ```sh
 # Bump the server image tag to a specific SHA
 kustomize edit set image tern/server=ghcr.io/<owner>/system-server:<sha>
-kubectl apply -k k8s/overlays/prod
-kubectl rollout status deployment/server -n tern-prod
+kubectl apply -k k8s/overlays/staging
+kubectl rollout status deployment/server -n tern-staging
 ```
