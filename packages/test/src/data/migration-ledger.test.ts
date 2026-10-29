@@ -148,8 +148,8 @@ describe("data migrations ledger (real Postgres)", () => {
 
         expect(await ledger(knex)).toEqual([...DATA_MIGRATION_NAMES].sort());
         expect(await nodeVersions(knex)).toEqual(before);
-        // The capture sees statements inside the migration transactions too.
-        expect(sql.some((s) => /pg_advisory_xact_lock/.test(s))).toBe(true);
+        // The capture sees the ledger lock and the migration transactions too.
+        expect(sql.some((s) => /pg_try_advisory_lock/.test(s))).toBe(true);
         const writes = sql.filter((s) =>
             /^\s*(update|delete|alter|drop)\b|create (or replace )?(trigger|function)/i.test(s),
         );
