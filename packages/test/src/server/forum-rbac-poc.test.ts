@@ -14,7 +14,7 @@
  * on one thread inside A.  Run: `yarn start server/forum-rbac-poc.test.ts`.
  */
 import { IRI } from "@terncosoftware/core";
-import { createDataContext, type Knex, TripleStore } from "@terncosoftware/data";
+import { type Knex, TripleStore } from "@terncosoftware/data";
 import { EntitySchema, entityIriFor } from "@terncosoftware/entities";
 import {
     buildServerContext,
@@ -34,7 +34,7 @@ import {
     UserGroupRepository,
 } from "@terncosoftware/server";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { assertEmptyStore } from "../assertEmptyStore.js";
+import { assertEmptyStore, createTestDataContext } from "../assertEmptyStore.js";
 
 // ── Forum topology (PoC schemas) ──────────────────────────────────────────────
 
@@ -117,7 +117,7 @@ describe("PoC — forum RBAC scoped over the entity topology", () => {
     const NOBODY = userIri("nobody");
 
     beforeEach(async () => {
-        knex = await createDataContext({ client: "sqlite", filename: ":memory:" });
+        knex = await createTestDataContext({ client: "sqlite", filename: ":memory:" });
         trx = await knex.transaction();
         store = new TripleStore(knex);
         es = new EntityStore(store);

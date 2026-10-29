@@ -34,12 +34,12 @@ import {
     UserSessionRepository,
 } from "@terncosoftware/auth";
 import { bindService } from "@terncosoftware/core";
-import { createDataContext, type Knex, TripleStore } from "@terncosoftware/data";
+import { type Knex, TripleStore } from "@terncosoftware/data";
 import { FlowContext, type FlowPort } from "@terncosoftware/flow";
 import { buildServerContext, type ServerContext, systemSec } from "@terncosoftware/server";
 import { Redis } from "ioredis";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { assertEmptyStore } from "../assertEmptyStore.js";
+import { assertEmptyStore, createTestDataContext } from "../assertEmptyStore.js";
 import { TEST_CIPHER } from "./testCipher.js";
 
 // Same resolution as the other real-infrastructure suites: the env var wins,
@@ -54,7 +54,7 @@ const CACHE_TTL_SECS = 300;
 
 function pgContext(): Promise<Knex> {
     const url = new URL(PG_URL);
-    return createDataContext({
+    return createTestDataContext({
         client: "pg",
         host: url.hostname,
         port: url.port ? Number(url.port) : 5432,

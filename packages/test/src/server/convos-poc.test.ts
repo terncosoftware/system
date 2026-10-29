@@ -11,7 +11,7 @@
  * is self-contained. Run: `yarn start server/convos-poc.test.ts`.
  */
 import { IRI } from "@terncosoftware/core";
-import { createDataContext, type Knex, TripleStore } from "@terncosoftware/data";
+import { type Knex, TripleStore } from "@terncosoftware/data";
 import { EntitySchema } from "@terncosoftware/entities";
 import { entityIriFor } from "@terncosoftware/entities";
 import {
@@ -33,7 +33,7 @@ import {
     UserGroupRepository,
 } from "@terncosoftware/server";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { assertEmptyStore } from "../assertEmptyStore.js";
+import { assertEmptyStore, createTestDataContext } from "../assertEmptyStore.js";
 
 // ── PoC schemas (a tiny convos topology) ──────────────────────────────────────
 
@@ -94,7 +94,7 @@ describe("PoC — convos update system (rooted traversal + RBAC)", () => {
     const BOB = entityIriFor({ ns: "urn:sys:core:auth:", typeIRI: new IRI("urn:sys:core:auth:User") }, "bob").value;
 
     beforeEach(async () => {
-        knex = await createDataContext({ client: "sqlite", filename: ":memory:" });
+        knex = await createTestDataContext({ client: "sqlite", filename: ":memory:" });
         trx = await knex.transaction();
         store = new TripleStore(knex);
         es = new EntityStore(store);

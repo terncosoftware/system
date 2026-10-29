@@ -20,12 +20,12 @@
  */
 
 import { IRI } from "@terncosoftware/core";
-import { createDataContext, TripleStore } from "@terncosoftware/data";
+import { TripleStore } from "@terncosoftware/data";
 import { EntitySchema } from "@terncosoftware/entities";
 import { buildServerContext, EntityStore, type ServerContext } from "@terncosoftware/server";
 import type { Knex } from "knex";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { assertEmptyStore } from "../assertEmptyStore.js";
+import { assertEmptyStore, createTestDataContext } from "../assertEmptyStore.js";
 
 // ── Account schema (plain, non-PII so `where('email','=')` matches a literal) ──
 
@@ -60,7 +60,7 @@ describe("EntityQuery — cross-tenant isolation (Postgres)", () => {
 
     beforeEach(async () => {
         const url = new URL(PG_URL);
-        knex = await createDataContext({
+        knex = await createTestDataContext({
             client: "pg",
             host: url.hostname,
             port: url.port ? Number(url.port) : 5432,

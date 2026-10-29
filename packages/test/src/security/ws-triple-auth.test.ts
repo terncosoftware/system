@@ -35,7 +35,7 @@ import {
     type SystemRequest,
     type SystemResult,
 } from "@terncosoftware/core";
-import { createDataContext, type Knex, TripleStore } from "@terncosoftware/data";
+import { type Knex, TripleStore } from "@terncosoftware/data";
 import { FlowApp, WebSocketServer, type WsPrincipal } from "@terncosoftware/flow";
 import {
     buildServerContext,
@@ -65,7 +65,7 @@ import {
     handleInsert,
     handleStats,
 } from "../../../sandbox-server/src/handlers/triples.js";
-import { assertEmptyStore } from "../assertEmptyStore.js";
+import { assertEmptyStore, createTestDataContext } from "../assertEmptyStore.js";
 import { TEST_CIPHER } from "../auth/testCipher.js";
 
 // ── Infra: real Postgres only (no SQLite — repo law + PO bar) ────────────────
@@ -74,7 +74,7 @@ const PG_URL = process.env.SYS_PG_URL ?? "postgresql://sys:sys@localhost:5432/sy
 
 function pgContext(): Promise<Knex> {
     const url = new URL(PG_URL);
-    return createDataContext({
+    return createTestDataContext({
         client: "pg",
         host: url.hostname,
         port: url.port ? Number(url.port) : 5432,

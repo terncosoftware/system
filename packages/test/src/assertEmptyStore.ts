@@ -1,10 +1,33 @@
-import { getMigrationBaseline } from "@terncosoftware/data";
+import { createDataContext, type DataConfig } from "@terncosoftware/data";
 import type { Knex } from "knex";
 
 const STORE_TABLES = ["edges", "nodes", "namespaces"] as const;
 
+const baselines = new WeakMap<Knex, Record<string, number>>();
+
+async function countStore(knex: Knex): Promise<Record<string, number>> {
+    const counts: Record<string, number> = {};
+    for (const table of STORE_TABLES) {
+        const [row] = await knex(table).count<{ count: string }[]>("* as count");
+        counts[table] = Number(row?.count ?? 0);
+    }
+    return counts;
+}
+
 /**
- * Asserts the quad store contains no rows beyond the post-migration baseline.
+ * createDataContext for a suite that calls assertEmptyStore: also records the
+ * store's row counts as the baseline a clean suite must return to. Counting is
+ * a test concern, so createDataContext itself never scans the store.
+ */
+export async function createTestDataContext(config: DataConfig): Promise<Knex> {
+    const knex = await createDataContext(config);
+    baselines.set(knex, await countStore(knex));
+    return knex;
+}
+
+/**
+ * Asserts the quad store contains no rows beyond the baseline recorded when
+ * createTestDataContext connected.
  *
  * Call this in a DB suite's `afterEach`, AFTER the test transaction has rolled
  * back but BEFORE `knex.destroy()`. Because every test runs inside a
@@ -15,14 +38,17 @@ const STORE_TABLES = ["edges", "nodes", "namespaces"] as const;
  * Failing loudly here pinpoints the suite.
  */
 export async function assertEmptyStore(knex: Knex): Promise<void> {
-    const baseline = getMigrationBaseline(knex);
+    const baseline = baselines.get(knex);
+    if (!baseline) {
+        throw new Error(
+            "No store baseline for this connection: open it with createTestDataContext",
+        );
+    }
+    const counts = await countStore(knex);
     const dirty: string[] = [];
     for (const table of STORE_TABLES) {
-        const [row] = await knex(table).count<{ count: string }[]>("* as count");
-        const n = Number(row?.count ?? 0);
-        const expected = baseline[table] ?? 0;
-        if (n !== expected) {
-            dirty.push(`${table}=${n}`);
+        if (counts[table] !== baseline[table]) {
+            dirty.push(`${table}=${counts[table]}`);
         }
     }
     if (dirty.length > 0) {

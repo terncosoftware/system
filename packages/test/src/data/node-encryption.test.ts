@@ -2,8 +2,8 @@
  * TRN-191: nodes encryption-column migration.
  *
  * Verifies the additive `is_encrypted` / `key_id` columns exist with the right
- * defaults, and that the migration is idempotent (re-running it is a no-op —
- * createDataContext re-runs every migration on each connect). Runs against
+ * defaults, and that the migration is idempotent (re-running it is a no-op, as
+ * it must be for a database that predates the migrations ledger). Runs against
  * SQLite always and Postgres when SYS_PG_URL is set.
  */
 

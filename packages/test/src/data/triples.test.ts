@@ -18,7 +18,11 @@ import { buildServerContext, type ServerContext } from "@terncosoftware/server";
 import type { Knex } from "knex";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { down as migration001Down } from "../../../data/src/migrations/001_init.js";
-import { assertEmptyStore, assertStoreIntegrity } from "../assertEmptyStore.js";
+import {
+    assertEmptyStore,
+    assertStoreIntegrity,
+    createTestDataContext,
+} from "../assertEmptyStore.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -55,7 +59,7 @@ interface Provider {
 const providers: Provider[] = [
     {
         name: "SQLite (in-memory)",
-        create: () => createDataContext({ client: "sqlite", filename: ":memory:" }),
+        create: () => createTestDataContext({ client: "sqlite", filename: ":memory:" }),
     },
 ];
 
@@ -64,7 +68,7 @@ if (process.env.SYS_PG_URL) {
     providers.push({
         name: "Postgres",
         create: () =>
-            createDataContext({
+            createTestDataContext({
                 client: "pg",
                 host: url.hostname,
                 port: url.port ? Number(url.port) : 5432,
@@ -373,7 +377,7 @@ for (const provider of providers) {
 
 describe("migration 001_init down()", () => {
     it("drops all tables cleanly", async () => {
-        const knex = await createDataContext({ client: "sqlite", filename: ":memory:" });
+        const knex = await createTestDataContext({ client: "sqlite", filename: ":memory:" });
         // Tables already created by createDataContext; run down() to drop them
         await migration001Down(knex);
         // After down(), the tables should be gone — querying should throw
@@ -403,7 +407,7 @@ describe("createDataContext(pg)", () => {
 
 describe("TripleStore: find graph:null + delete with explicit graph", () => {
     it("find({graph:null}) returns quads in the default graph", async () => {
-        const knex = await createDataContext({ client: "sqlite", filename: ":memory:" });
+        const knex = await createTestDataContext({ client: "sqlite", filename: ":memory:" });
         const store = new TripleStore(knex);
         const ctx = buildServerContext(store);
         const s = iri("http://example.org/s");
@@ -421,7 +425,7 @@ describe("TripleStore: find graph:null + delete with explicit graph", () => {
     });
 
     it("delete({graph: iri}) deletes quads in a named graph", async () => {
-        const knex = await createDataContext({ client: "sqlite", filename: ":memory:" });
+        const knex = await createTestDataContext({ client: "sqlite", filename: ":memory:" });
         const store = new TripleStore(knex);
         const ctx = buildServerContext(store);
         const g = iri("http://example.org/g");
@@ -443,7 +447,7 @@ describe("TripleStore: find/delete with non-existent nodes return early", () => 
     for (const provider of [
         {
             name: "sqlite",
-            factory: async () => createDataContext({ client: "sqlite", filename: ":memory:" }),
+            factory: async () => createTestDataContext({ client: "sqlite", filename: ":memory:" }),
         },
     ]) {
         describe(`TripleStore — ${provider.name}`, () => {

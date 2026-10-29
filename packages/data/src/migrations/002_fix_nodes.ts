@@ -15,20 +15,30 @@ export async function up(knex: Knex): Promise<void> {
     const isPg = client === "pg" || client === "postgresql";
 
     // 1. Remove all-null triples — rows with no IRI, blank ID, value, or JSON payload.
-    await knex("nodes").whereNull("iri").whereNull("blank_id").whereNull("value").whereNull("value_json").delete();
+    await knex("nodes")
+        .whereNull("iri")
+        .whereNull("blank_id")
+        .whereNull("value")
+        .whereNull("value_json")
+        .delete();
 
     // 2. Strip the `dt` field from value_json — it duplicates the datatype column.
+    //    Only rows that still carry it are rewritten, so a re-run updates nothing.
+    //    `\\?` is knex's escape for Postgres's jsonb key-exists operator.
     if (isPg) {
-        await knex.raw(`UPDATE nodes SET value_json = value_json - 'dt' WHERE kind = 'literal' AND value_json IS NOT NULL`);
+        await knex.raw(
+            `UPDATE nodes SET value_json = value_json - 'dt' WHERE kind = 'literal' AND value_json \\? 'dt'`,
+        );
     } else {
-        await knex.raw(`UPDATE nodes SET value_json = json_remove(value_json, '$.dt') WHERE kind = 'literal' AND value_json IS NOT NULL`);
+        await knex.raw(
+            `UPDATE nodes SET value_json = json_remove(value_json, '$.dt') WHERE kind = 'literal' AND json_type(value_json, '$.dt') IS NOT NULL`,
+        );
     }
 
-    // 3. Rename datatype → dt — only if not already done. createDataContext
-    //    re-runs every migration on each connect, so this must be a no-op
-    //    against an already-migrated database (e.g. a second worker replica
-    //    sharing one Postgres). Renaming again would fail: the source column
-    //    no longer exists.
+    // 3. Rename datatype → dt — only if not already done. The ledger runs this
+    //    once per database, but one that predates the ledger may re-run it, so
+    //    it must be a no-op against an already-migrated database. Renaming
+    //    again would fail: the source column no longer exists.
     const hasDatatype = await knex.schema.hasColumn("nodes", "datatype");
     const hasDt = await knex.schema.hasColumn("nodes", "dt");
     if (hasDatatype && !hasDt) {

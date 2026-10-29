@@ -11,7 +11,7 @@
  * Real Postgres only, each test in a rolled-back transaction.
  */
 
-import { createDataContext, TripleStore } from "@terncosoftware/data";
+import { TripleStore } from "@terncosoftware/data";
 import {
     buildServerContext,
     PermissionRepository,
@@ -29,7 +29,7 @@ import {
 } from "@terncosoftware/server";
 import type { Knex } from "knex";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { assertEmptyStore } from "../assertEmptyStore.js";
+import { assertEmptyStore, createTestDataContext } from "../assertEmptyStore.js";
 
 const PG_URL = process.env.SYS_PG_URL ?? "postgresql://sys:sys@localhost:5432/sys";
 
@@ -39,7 +39,7 @@ const DAVE = "urn:sys:core:auth:user:test-dave";
 
 function pgContext(): Promise<Knex> {
     const url = new URL(PG_URL);
-    return createDataContext({
+    return createTestDataContext({
         client: "pg",
         host: url.hostname,
         port: url.port ? Number(url.port) : 5432,

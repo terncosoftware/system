@@ -30,12 +30,12 @@ import {
     UserSessionRepository,
 } from "@terncosoftware/auth";
 import { bindService } from "@terncosoftware/core";
-import { createDataContext, TripleStore } from "@terncosoftware/data";
+import { TripleStore } from "@terncosoftware/data";
 import { FlowContext, type HttpResponseDraft, type ParsedHttpRequest } from "@terncosoftware/flow";
 import { buildServerContext, type ServerContext, systemSec } from "@terncosoftware/server";
 import type { Knex } from "knex";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { assertEmptyStore } from "../assertEmptyStore.js";
+import { assertEmptyStore, createTestDataContext } from "../assertEmptyStore.js";
 import { TEST_CIPHER } from "./testCipher.js";
 
 const NEG_CACHE_SENTINEL = "__neg__";
@@ -82,7 +82,7 @@ interface DbProvider {
 const dbProviders: DbProvider[] = [
     {
         name: "SQLite (in-memory)",
-        create: () => createDataContext({ client: "sqlite", filename: ":memory:" }),
+        create: () => createTestDataContext({ client: "sqlite", filename: ":memory:" }),
     },
 ];
 
@@ -91,7 +91,7 @@ if (process.env.SYS_PG_URL) {
     dbProviders.push({
         name: "Postgres",
         create: () =>
-            createDataContext({
+            createTestDataContext({
                 client: "pg",
                 host: url.hostname,
                 port: url.port ? Number(url.port) : 5432,
@@ -266,7 +266,7 @@ for (const db of dbProviders) {
 
 describe("AuthService.validateToken — neg-cache avoids the triple store", () => {
     it("does not re-hit the session repository on the second invalid lookup", async () => {
-        const knex = await createDataContext({ client: "sqlite", filename: ":memory:" });
+        const knex = await createTestDataContext({ client: "sqlite", filename: ":memory:" });
         const store = new TripleStore(knex);
         const memStore = new MemorySessionStore();
 
@@ -376,7 +376,7 @@ describe("AuthRouterComponent — throttle / trusted-proxy / audit", () => {
     }
 
     beforeEach(async () => {
-        knex = await createDataContext({ client: "sqlite", filename: ":memory:" });
+        knex = await createTestDataContext({ client: "sqlite", filename: ":memory:" });
         trx = await knex.transaction();
         store = new TripleStore(trx as unknown as Knex);
         memStore = new MemorySessionStore();

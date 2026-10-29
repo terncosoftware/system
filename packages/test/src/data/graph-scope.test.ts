@@ -19,10 +19,14 @@
 
 import type { IRI, Literal, Quad } from "@terncosoftware/core";
 import { DEFAULT_GRAPH } from "@terncosoftware/core";
-import { createDataContext, type Knex, type QuadPattern, TripleStore } from "@terncosoftware/data";
+import { type Knex, type QuadPattern, TripleStore } from "@terncosoftware/data";
 import { buildServerContext, type ServerContext } from "@terncosoftware/server";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { assertEmptyStore, assertStoreIntegrity } from "../assertEmptyStore.js";
+import {
+    assertEmptyStore,
+    assertStoreIntegrity,
+    createTestDataContext,
+} from "../assertEmptyStore.js";
 
 // Same resolution as the other real-infrastructure suites: the env var wins,
 // else the shared dev/CI default.
@@ -73,7 +77,7 @@ describe("TripleStore graph scope (real Postgres)", () => {
     // timestamp triggers (TRN-538). Isolation is still per test, by transaction.
     beforeAll(async () => {
         const url = new URL(PG_URL);
-        knex = await createDataContext({
+        knex = await createTestDataContext({
             client: "pg",
             host: url.hostname,
             port: url.port ? Number(url.port) : 5432,
