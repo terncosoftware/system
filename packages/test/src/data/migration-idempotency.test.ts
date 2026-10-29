@@ -1,19 +1,18 @@
 /**
- * Migration idempotency.
+ * Migration idempotency — SQLite.
  *
- * createDataContext re-runs every migration (001/002/003) on each connect — it
- * has no applied-migrations ledger. So every migration must be a no-op against
- * an already-migrated database; otherwise a second connection to the same
- * persistent database (a second worker replica sharing one Postgres, or simply
- * reconnecting) fails on a non-idempotent step.
+ * createDataContext records each applied migration in its ledger, so a second
+ * connect to the same database runs none of them. Each migration must still be
+ * a no-op against an already-migrated database: one that predates the ledger
+ * re-runs any migration whose effects the backfill cannot confirm.
  *
  * Regression: migrate002 unconditionally renamed `nodes.datatype` → `dt` and
  * added `nodes.v`/`vh`, which threw "column datatype does not exist" / "column
  * v already exists" on the second connect.
  *
  * A SQLite *file* (not :memory:, which is private per connection) reproduces the
- * shared-database scenario deterministically without needing Postgres: the
- * second createDataContext re-runs the migrations against the populated file.
+ * shared-database scenario deterministically. migration-ledger.test.ts covers
+ * the ledger itself against real Postgres.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -40,8 +39,8 @@ describe("Migration idempotency — SQLite (shared file)", () => {
         const first = await createDataContext({ client: "sqlite", filename: file });
         await first.destroy();
 
-        // Second connect re-runs every migration against the populated file.
-        // This previously threw on migrate002's unconditional rename / column add.
+        // Second connect against the populated file. This previously threw on
+        // migrate002's unconditional rename / column add.
         const second = await createDataContext({ client: "sqlite", filename: file });
 
         try {

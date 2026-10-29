@@ -7,13 +7,13 @@
  */
 
 import { IRI } from "@terncosoftware/core";
-import { createDataContext, TripleStore } from "@terncosoftware/data";
+import { TripleStore } from "@terncosoftware/data";
 import { EntitySchema } from "@terncosoftware/entities";
 import { buildServerContext, EntityStore, type ServerContext } from "@terncosoftware/server";
 import type { Knex } from "knex";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { up as seedData } from "../../../data/src/migrations/001_init.js";
-import { assertEmptyStore } from "../assertEmptyStore.js";
+import { assertEmptyStore, createTestDataContext } from "../assertEmptyStore.js";
 
 // ── Widget schema ─────────────────────────────────────────────────────────────
 
@@ -46,7 +46,7 @@ describe("EntityStore — tenant isolation", () => {
     }
 
     beforeEach(async () => {
-        knex = await createDataContext({ client: "sqlite", filename: ":memory:" });
+        knex = await createTestDataContext({ client: "sqlite", filename: ":memory:" });
         await seedData(knex);
         trx = await knex.transaction();
         store = new TripleStore(knex);

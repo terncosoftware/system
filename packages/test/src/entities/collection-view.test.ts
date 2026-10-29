@@ -19,12 +19,12 @@
 
 import { UserSchema } from "@terncosoftware/auth";
 import { IRI } from "@terncosoftware/core";
-import { createDataContext, TripleStore } from "@terncosoftware/data";
+import { TripleStore } from "@terncosoftware/data";
 import { EntitySchema } from "@terncosoftware/entities";
 import { CollectionViewStore, buildServerContext, EntityStore } from "@terncosoftware/server";
 import type { Knex } from "knex";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { assertEmptyStore } from "../assertEmptyStore.js";
+import { assertEmptyStore, createTestDataContext } from "../assertEmptyStore.js";
 import { TEST_CIPHER } from "../auth/testCipher.js";
 
 // ── Provider matrix ───────────────────────────────────────────────────────────
@@ -35,7 +35,7 @@ interface DbProvider {
 }
 
 const providers: DbProvider[] = [
-    { name: "SQLite", create: () => createDataContext({ client: "sqlite", filename: ":memory:" }) },
+    { name: "SQLite", create: () => createTestDataContext({ client: "sqlite", filename: ":memory:" }) },
 ];
 
 if (process.env.SYS_PG_URL) {
@@ -43,7 +43,7 @@ if (process.env.SYS_PG_URL) {
     providers.push({
         name: "Postgres",
         create: () =>
-            createDataContext({
+            createTestDataContext({
                 client: "pg",
                 host: url.hostname,
                 port: url.port ? Number(url.port) : 5432,

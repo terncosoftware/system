@@ -40,7 +40,7 @@ import {
     UserSessionSchema,
 } from "@terncosoftware/auth";
 import { bindService } from "@terncosoftware/core";
-import { createDataContext, TripleStore } from "@terncosoftware/data";
+import { TripleStore } from "@terncosoftware/data";
 import {
     FlowContext,
     type HttpCtx,
@@ -56,7 +56,7 @@ import {
 } from "@terncosoftware/server";
 import type { Knex } from "knex";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { assertEmptyStore } from "../assertEmptyStore.js";
+import { assertEmptyStore, createTestDataContext } from "../assertEmptyStore.js";
 import { TEST_CIPHER } from "./testCipher.js";
 
 function startServer(
@@ -84,7 +84,7 @@ interface DbProvider {
 const dbProviders: DbProvider[] = [
     {
         name: "SQLite (in-memory)",
-        create: () => createDataContext({ client: "sqlite", filename: ":memory:" }),
+        create: () => createTestDataContext({ client: "sqlite", filename: ":memory:" }),
     },
 ];
 
@@ -93,7 +93,7 @@ if (process.env.SYS_PG_URL) {
     dbProviders.push({
         name: "Postgres",
         create: () =>
-            createDataContext({
+            createTestDataContext({
                 client: "pg",
                 host: url.hostname,
                 port: url.port ? Number(url.port) : 5432,
@@ -756,7 +756,7 @@ describe("AuthService", () => {
             } as Response);
 
     beforeEach(async () => {
-        knex = await createDataContext({ client: "sqlite", filename: ":memory:" });
+        knex = await createTestDataContext({ client: "sqlite", filename: ":memory:" });
         trx = await knex.transaction();
         store = new TripleStore(trx as unknown as import("knex").Knex);
         service = new AuthService({
@@ -966,7 +966,7 @@ describe("SessionComponent", () => {
     let memStore: MemorySessionStore;
 
     beforeEach(async () => {
-        knex = await createDataContext({ client: "sqlite", filename: ":memory:" });
+        knex = await createTestDataContext({ client: "sqlite", filename: ":memory:" });
         trx = await knex.transaction();
         store = new TripleStore(trx as unknown as import("knex").Knex);
         memStore = new MemorySessionStore();
@@ -1122,7 +1122,7 @@ describe("CallbackComponent (FBP)", () => {
     let memStore: MemorySessionStore;
 
     beforeEach(async () => {
-        knex = await createDataContext({ client: "sqlite", filename: ":memory:" });
+        knex = await createTestDataContext({ client: "sqlite", filename: ":memory:" });
         trx = await knex.transaction();
         store = new TripleStore(trx as unknown as import("knex").Knex);
         memStore = new MemorySessionStore();
@@ -1199,7 +1199,7 @@ describe("CallbackComponent (FBP)", () => {
 
 describe("AuthService.validateToken — fallback path", () => {
     it("validates from TripleStore when session store is empty", async () => {
-        const knex = await createDataContext({ client: "sqlite", filename: ":memory:" });
+        const knex = await createTestDataContext({ client: "sqlite", filename: ":memory:" });
         const store = new TripleStore(knex);
         const memStore = new MemorySessionStore();
         const users = new UserRepository(store, TEST_CIPHER);
@@ -1258,7 +1258,7 @@ describe("AuthService.validateToken — fallback path", () => {
 
 describe("AuthRouterComponent.sessionMiddleware()", () => {
     it("attaches user to ctx when cookie is valid", async () => {
-        const knex = await createDataContext({ client: "sqlite", filename: ":memory:" });
+        const knex = await createTestDataContext({ client: "sqlite", filename: ":memory:" });
         const store = new TripleStore(knex);
         const memStore = new MemorySessionStore();
 
@@ -1328,7 +1328,7 @@ describe("AuthRouterComponent.sessionMiddleware()", () => {
     });
 
     it("leaves ctx.user undefined for invalid token", async () => {
-        const knex = await createDataContext({ client: "sqlite", filename: ":memory:" });
+        const knex = await createTestDataContext({ client: "sqlite", filename: ":memory:" });
         const ctx = new FlowContext();
 
         bindService(SessionStore, new MemorySessionStore());
@@ -1380,7 +1380,7 @@ describe("AuthRouterComponent HTTP routes", () => {
     }
 
     beforeEach(async () => {
-        knex = await createDataContext({ client: "sqlite", filename: ":memory:" });
+        knex = await createTestDataContext({ client: "sqlite", filename: ":memory:" });
         trx = await knex.transaction();
         store = new TripleStore(trx as unknown as import("knex").Knex);
         memStore = new MemorySessionStore();
@@ -1653,7 +1653,7 @@ describe("RedisSessionStore", () => {
 
 describe("AuthService.validateToken — cache hit", () => {
     it("returns user from fast-path cache without hitting the DB", async () => {
-        const knex = await createDataContext({ client: "sqlite", filename: ":memory:" });
+        const knex = await createTestDataContext({ client: "sqlite", filename: ":memory:" });
         const store = new TripleStore(knex);
         const memStore = new MemorySessionStore();
         const users = new UserRepository(store, TEST_CIPHER);
@@ -1706,7 +1706,7 @@ describe("AuthService.validateToken — cache hit", () => {
     });
 
     it("evicts expired session from cache and falls through to DB path", async () => {
-        const knex = await createDataContext({ client: "sqlite", filename: ":memory:" });
+        const knex = await createTestDataContext({ client: "sqlite", filename: ":memory:" });
         const store = new TripleStore(knex);
         const memStore = new MemorySessionStore();
 

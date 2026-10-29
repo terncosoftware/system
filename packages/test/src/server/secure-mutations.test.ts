@@ -11,7 +11,7 @@
  * Run: `yarn start server/secure-mutations.test.ts`.
  */
 import { IRI } from "@terncosoftware/core";
-import { createDataContext, type Knex, TripleStore } from "@terncosoftware/data";
+import { type Knex, TripleStore } from "@terncosoftware/data";
 import { EntitySchema, entityIriFor, RDF_TYPE } from "@terncosoftware/entities";
 import {
     buildServerContext,
@@ -31,7 +31,7 @@ import {
     UserGroupRepository,
 } from "@terncosoftware/server";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { assertEmptyStore } from "../assertEmptyStore.js";
+import { assertEmptyStore, createTestDataContext } from "../assertEmptyStore.js";
 
 const NS = "urn:sys:ext:securepoc:";
 const hasForumIRI = new IRI(`${NS}hasForum`);
@@ -97,7 +97,7 @@ describe("PoC — secure-by-default mutations", () => {
     const BOB = userIri("bob");
 
     beforeEach(async () => {
-        knex = await createDataContext({ client: "sqlite", filename: ":memory:" });
+        knex = await createTestDataContext({ client: "sqlite", filename: ":memory:" });
         trx = await knex.transaction();
         store = new TripleStore(knex);
         es = new EntityStore(store);
@@ -231,7 +231,7 @@ describe("PoC — secure mutations are atomic (create + attach-under)", () => {
     let ctx: ServerContext;
 
     beforeEach(async () => {
-        knex = await createDataContext({ client: "sqlite", filename: ":memory:" });
+        knex = await createTestDataContext({ client: "sqlite", filename: ":memory:" });
         store = new TripleStore(knex);
         es = new EntityStore(store);
         ctx = buildServerContext(store, { tenantId: "acme", schemas: FORUM_SCHEMAS }); // no ambient trx

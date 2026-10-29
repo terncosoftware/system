@@ -1,10 +1,6 @@
 import { getLog } from "@terncosoftware/core";
 import type { Knex } from "knex";
-import { recordMigrationBaseline } from "./migrationBaseline.js";
-import { up as migrate001 } from "./migrations/001_init.js";
-import { up as migrate002 } from "./migrations/002_fix_nodes.js";
-import { up as migrate003 } from "./migrations/003_jobs_roles.js";
-import { up as migrate004 } from "./migrations/004_node_encryption.js";
+import { runDataMigrations } from "./migrate.js";
 import { attachSqlLogging, sqlLoggingEnabled } from "./sqlLogging.js";
 
 const log = getLog("sys:data:sql");
@@ -68,8 +64,10 @@ export interface PgConfig {
 export type DataConfig = SqliteConfig | PgConfig;
 
 /**
- * Creates and migrates a Knex instance for the given configuration.
- * Call `knex.destroy()` when finished to release the connection pool.
+ * Creates a Knex instance for the given configuration and applies any pending
+ * data migrations (see runDataMigrations). A connect to an up-to-date database
+ * only reads the migrations ledger. Call `knex.destroy()` when finished to
+ * release the connection pool.
  */
 export async function createDataContext(config: DataConfig): Promise<Knex> {
     const { default: Knex } = await import("knex");
@@ -115,10 +113,6 @@ export async function createDataContext(config: DataConfig): Promise<Knex> {
         attachSqlLogging(knex, (line) => log.debug("query", line));
     }
 
-    await migrate001(knex);
-    await migrate002(knex);
-    await migrate003(knex);
-    await migrate004(knex);
-    await recordMigrationBaseline(knex);
+    await runDataMigrations(knex);
     return knex;
 }

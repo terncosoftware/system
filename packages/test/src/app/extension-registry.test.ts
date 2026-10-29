@@ -5,7 +5,7 @@
  */
 
 import type { ExtensionInstallContext, TernExtension } from "@terncosoftware/app";
-import { createDataContext, TripleStore } from "@terncosoftware/data";
+import { TripleStore } from "@terncosoftware/data";
 import {
     buildServerContext,
     ExtensionManager,
@@ -15,7 +15,7 @@ import {
 import type { Knex } from "knex";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { up as seedData } from "../../../data/src/migrations/001_init.js";
-import { assertEmptyStore } from "../assertEmptyStore.js";
+import { assertEmptyStore, createTestDataContext } from "../assertEmptyStore.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -54,7 +54,7 @@ describe("ExtensionRegistry + ExtensionManager", () => {
     let extCtx: ExtensionInstallContext;
 
     beforeEach(async () => {
-        knex = await createDataContext({ client: "sqlite", filename: ":memory:" });
+        knex = await createTestDataContext({ client: "sqlite", filename: ":memory:" });
         await seedData(knex);
         trx = await knex.transaction();
         ctx = buildServerContext(store, { trx });

@@ -6,7 +6,7 @@
  * SYS_PG_URL is set), each in a rolled-back transaction.
  */
 
-import { createDataContext, TripleStore } from "@terncosoftware/data";
+import { TripleStore } from "@terncosoftware/data";
 import {
     buildServerContext,
     PermissionRepository,
@@ -24,7 +24,7 @@ import {
 } from "@terncosoftware/server";
 import type { Knex } from "knex";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { assertEmptyStore } from "../assertEmptyStore.js";
+import { assertEmptyStore, createTestDataContext } from "../assertEmptyStore.js";
 
 interface DbProvider {
     name: string;
@@ -34,7 +34,7 @@ interface DbProvider {
 const providers: DbProvider[] = [
     {
         name: "SQLite (in-memory)",
-        create: () => createDataContext({ client: "sqlite", filename: ":memory:" }),
+        create: () => createTestDataContext({ client: "sqlite", filename: ":memory:" }),
     },
 ];
 
@@ -43,7 +43,7 @@ if (process.env.SYS_PG_URL) {
     providers.push({
         name: "Postgres",
         create: () =>
-            createDataContext({
+            createTestDataContext({
                 client: "pg",
                 host: url.hostname,
                 port: url.port ? Number(url.port) : 5432,

@@ -14,14 +14,14 @@
 
 import { UserSchema } from "@terncosoftware/auth";
 import { IRI } from "@terncosoftware/core";
-import { createDataContext, TripleStore } from "@terncosoftware/data";
+import { TripleStore } from "@terncosoftware/data";
 import { EntitySchema } from "@terncosoftware/entities";
 import type { ShaclNodeShape } from "@terncosoftware/gen";
 import { buildServerContext, EntityStore, EntityValidationError } from "@terncosoftware/server";
 import type { Knex } from "knex";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { fromLiteral, invertPropertyMap, propertyMapFor } from "../../../entities/src/util.js";
-import { assertEmptyStore } from "../assertEmptyStore.js";
+import { assertEmptyStore, createTestDataContext } from "../assertEmptyStore.js";
 import { TEST_CIPHER } from "../auth/testCipher.js";
 
 // ── Provider matrix ───────────────────────────────────────────────────────────
@@ -32,7 +32,10 @@ interface DbProvider {
 }
 
 const providers: DbProvider[] = [
-    { name: "SQLite", create: () => createDataContext({ client: "sqlite", filename: ":memory:" }) },
+    {
+        name: "SQLite",
+        create: () => createTestDataContext({ client: "sqlite", filename: ":memory:" }),
+    },
 ];
 
 if (process.env.SYS_PG_URL) {
@@ -40,7 +43,7 @@ if (process.env.SYS_PG_URL) {
     providers.push({
         name: "Postgres",
         create: () =>
-            createDataContext({
+            createTestDataContext({
                 client: "pg",
                 host: url.hostname,
                 port: url.port ? Number(url.port) : 5432,
@@ -573,7 +576,7 @@ describe("EntityStore — defensive throw paths", () => {
     let itemId: string;
 
     beforeEach(async () => {
-        knex = await createDataContext({ client: "sqlite", filename: ":memory:" });
+        knex = await createTestDataContext({ client: "sqlite", filename: ":memory:" });
         es = new EntityStore(new TripleStore(knex));
         schema = makeTestSchema();
         const rec = await es.create(buildServerContext(es.store), schema, { name: "Item" });
@@ -611,7 +614,7 @@ describe("EntityStore — defensive throw paths", () => {
 
 describe("EntityStore — views getter", () => {
     it("es.views returns a CollectionViewStore instance", async () => {
-        const knex = await createDataContext({ client: "sqlite", filename: ":memory:" });
+        const knex = await createTestDataContext({ client: "sqlite", filename: ":memory:" });
         const store = new TripleStore(knex);
         const es = new EntityStore(store);
         expect(es.views).toBeDefined();
@@ -626,7 +629,7 @@ describe("EntityStore — collectionGet/Remove with unknown prop returns early",
     let itemId: string;
 
     beforeEach(async () => {
-        knex = await createDataContext({ client: "sqlite", filename: ":memory:" });
+        knex = await createTestDataContext({ client: "sqlite", filename: ":memory:" });
         es = new EntityStore(new TripleStore(knex));
         schema = makeTestSchema();
         const rec = await es.create(buildServerContext(es.store), schema, { name: "Item" });
@@ -666,7 +669,7 @@ describe("EntityStore — collectionGet/Remove with unknown prop returns early",
 
 describe("EntityStore — inTransaction wraps work in a DB transaction", () => {
     it("executes fn inside a knex transaction and returns result", async () => {
-        const knex = await createDataContext({ client: "sqlite", filename: ":memory:" });
+        const knex = await createTestDataContext({ client: "sqlite", filename: ":memory:" });
         const store = new TripleStore(knex);
         const es = new EntityStore(store);
         const schema = makeTestSchema();
@@ -697,7 +700,7 @@ describe("EntityStore._validate — schema with shape", () => {
     });
 
     it("validates successfully when required prop is present", async () => {
-        const knex = await createDataContext({ client: "sqlite", filename: ":memory:" });
+        const knex = await createTestDataContext({ client: "sqlite", filename: ":memory:" });
         const store = new TripleStore(knex);
         const es = new EntityStore(store);
         const rec = await es.create(buildServerContext(es.store), schemaWithShape, {
@@ -708,7 +711,7 @@ describe("EntityStore._validate — schema with shape", () => {
     });
 
     it("throws EntityValidationError when required prop missing", async () => {
-        const knex = await createDataContext({ client: "sqlite", filename: ":memory:" });
+        const knex = await createTestDataContext({ client: "sqlite", filename: ":memory:" });
         const store = new TripleStore(knex);
         const es = new EntityStore(store);
         await expect(

@@ -14,9 +14,8 @@ import { C, T } from "../schema.js";
  * Additive only — no behavior change here. Encryption of values, the query-term
  * matching, and the entity-layer encrypt/decrypt seam land in later changes.
  *
- * Idempotent: createDataContext re-runs every migration on each connect, so
- * each column add is guarded by hasColumn (a second replica sharing one
- * Postgres must see this as a no-op).
+ * Idempotent: each column add is guarded by hasColumn, so a database that
+ * predates the migrations ledger can re-run it as a no-op.
  */
 export async function up(knex: Knex): Promise<void> {
     if (!(await knex.schema.hasColumn(T.nodes, C.isEncrypted))) {
