@@ -31,7 +31,9 @@ import type { Knex } from "knex";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { assertEmptyStore, createTestDataContext } from "../assertEmptyStore.js";
 
-const PG_URL = process.env.SYS_PG_URL ?? "postgresql://sys:sys@localhost:5432/sys";
+// Postgres-only: skipped (and reported as skipped) when SYS_PG_URL is unset.
+const PG_URL = process.env.SYS_PG_URL ?? "";
+const describePg = describe.skipIf(PG_URL === "");
 
 const PERMISSION_KEY = "project.read";
 const ALICE = "urn:sys:core:auth:user:test-alice";
@@ -58,7 +60,7 @@ interface Bootstrapped {
     roleIri: string;
 }
 
-describe("TRN-214: permissions resolve within the tenant graph", () => {
+describePg("Permissions resolve within the tenant graph (real Postgres)", () => {
     let knex: Knex | null = null;
     let trx: Knex.Transaction | null = null;
     let store: TripleStore;

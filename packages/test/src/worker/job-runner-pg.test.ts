@@ -36,14 +36,17 @@ import type { Knex } from "knex";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { poolInvocations, setPoolHandlerKnex } from "./fixtures/pool-handler.js";
 
-const PG_CONFIG = {
-    client: "pg" as const,
-    host: process.env.SYS_POSTGRES_HOST ?? "localhost",
-    port: Number(process.env.SYS_POSTGRES_PORT ?? "5432"),
-    database: process.env.SYS_POSTGRES_DATABASE ?? "sys",
-    user: process.env.SYS_POSTGRES_USER ?? "sys",
-    password: process.env.SYS_POSTGRES_PASSWORD ?? "sys",
-};
+function pgConfig() {
+    const url = new URL(process.env.SYS_PG_URL ?? "");
+    return {
+        client: "pg" as const,
+        host: url.hostname,
+        port: url.port ? Number(url.port) : 5432,
+        database: url.pathname.slice(1),
+        user: url.username,
+        password: url.password,
+    };
+}
 
 const FIXTURE_DIR = resolve(new URL(import.meta.url).pathname, "../fixtures");
 
@@ -99,12 +102,13 @@ describe.skipIf(!process.env.SYS_PG_URL)("JobRunner — real Postgres (TRN-403)"
     beforeAll(async () => {
         // A pool of ONE: the smallest pool that makes the held-transaction deadlock
         // deterministic. createDataContext runs the migrations so the schema exists.
-        knex = await createDataContext({ ...PG_CONFIG });
+        const config = pgConfig();
+        knex = await createDataContext(config);
         bindService(DataSource, new DataSource(knex));
         // Shrink the pool created above to a single connection for this suite.
         await knex.destroy();
         const { default: Knex } = await import("knex");
-        knex = Knex({ client: "pg", connection: PG_CONFIG, pool: { min: 1, max: 1 } });
+        knex = Knex({ client: "pg", connection: config, pool: { min: 1, max: 1 } });
         bindService(DataSource, new DataSource(knex));
     });
 

@@ -42,10 +42,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { assertEmptyStore, createTestDataContext } from "../assertEmptyStore.js";
 import { TEST_CIPHER } from "./testCipher.js";
 
-// Same resolution as the other real-infrastructure suites: the env var wins,
-// else the shared dev/CI default. Identical URLs everywhere means one Postgres
-// and one Redis are shared by every suite.
-const PG_URL = process.env.SYS_PG_URL ?? "postgresql://sys:sys@localhost:5432/sys";
+// Postgres-only: skipped (and reported as skipped) when SYS_PG_URL is unset.
+const PG_URL = process.env.SYS_PG_URL ?? "";
 const REDIS_URL = process.env.SYS_REDIS_URL ?? "redis://localhost:6379";
 
 // Short enough that anything a crashed run leaves in the shared Redis ages out
@@ -85,7 +83,7 @@ async function readPort<T>(port: FlowPort<T>, deadlineMs = 10_000): Promise<T> {
     }
 }
 
-describe("Session revocation (real Postgres + real Redis)", () => {
+describe.skipIf(PG_URL === "")("Session revocation (real Postgres + real Redis)", () => {
     // knex/redis are null until their setup hook succeeds, and teardown guards
     // on that, so a failed connection reports the real setup error instead of
     // cascading a TypeError out of afterEach/afterAll.

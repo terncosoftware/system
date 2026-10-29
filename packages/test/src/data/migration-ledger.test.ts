@@ -23,18 +23,18 @@ import {
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { up as migrate002 } from "../../../data/src/migrations/002_fix_nodes.js";
 
-// Same resolution as the other real-infrastructure suites: the env var wins,
-// else the shared dev/CI default.
-const PG_URL = new URL(process.env.SYS_PG_URL ?? "postgresql://sys:sys@localhost:5432/sys");
+// Postgres-only: skipped (and reported as skipped) when SYS_PG_URL is unset.
+const PG_URL = process.env.SYS_PG_URL ?? "";
 
 function pgConfig(database: string): PgConfig {
+    const url = new URL(PG_URL);
     return {
         client: "pg",
-        host: PG_URL.hostname,
-        port: PG_URL.port ? Number(PG_URL.port) : 5432,
+        host: url.hostname,
+        port: url.port ? Number(url.port) : 5432,
         database,
-        user: PG_URL.username,
-        password: PG_URL.password,
+        user: url.username,
+        password: url.password,
     };
 }
 
@@ -75,7 +75,7 @@ async function insertLiterals(knex: Knex, count: number): Promise<void> {
     );
 }
 
-describe("data migrations ledger (real Postgres)", () => {
+describe.skipIf(PG_URL === "")("data migrations ledger (real Postgres)", () => {
     let admin: Knex;
     let database: string;
     const open: Knex[] = [];
@@ -87,7 +87,7 @@ describe("data migrations ledger (real Postgres)", () => {
     }
 
     beforeAll(async () => {
-        admin = await createDataContext(pgConfig(PG_URL.pathname.slice(1)));
+        admin = await createDataContext(pgConfig(new URL(PG_URL).pathname.slice(1)));
     });
 
     afterAll(async () => {

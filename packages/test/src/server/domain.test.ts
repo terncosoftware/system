@@ -21,7 +21,6 @@ import {
 } from "@terncosoftware/server";
 import type { Knex } from "knex";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { up as seedData } from "../../../data/src/migrations/001_init.js";
 import { assertEmptyStore, createTestDataContext } from "../assertEmptyStore.js";
 
 // ── Schema contract tests (no DB) ─────────────────────────────────────────────
@@ -98,7 +97,6 @@ for (const provider of providers) {
 
         beforeEach(async () => {
             knex = await provider.create();
-            await seedData(knex);
             trx = await knex.transaction();
             store = new TripleStore(knex);
             entityStore = new EntityStore(store);

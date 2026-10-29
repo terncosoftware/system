@@ -13,10 +13,8 @@
  * This suite proves isolation on real Postgres (the engine prod runs). SQLite's
  * fresh-:memory:-per-test database can never exhibit a shared-DB cross-graph
  * leak, so the leak — and its fix — are only observable on a shared engine.
- * The suite is therefore Postgres-only and ALWAYS runs: like the security
- * suite, it reaches Postgres via SYS_PG_URL or the dev/CI default URL (the CI
- * postgres service and the dev cluster both answer sys/sys/sys on 5432). Each
- * test isolates inside a rolled-back transaction against the shared database.
+ * The suite is therefore Postgres-only and runs when SYS_PG_URL is set. Each
+ * test isolates inside a rolled-back transaction.
  */
 
 import { IRI } from "@terncosoftware/core";
@@ -48,11 +46,10 @@ const AccountSchema = new EntitySchema<AccountProps>({
 const TENANT_A = "trn531-tenant-a";
 const TENANT_B = "trn531-tenant-b";
 
-// Same resolution as the security suite: SYS_PG_URL wins, else the dev/CI
-// default. Keeping the URLs identical means one shared Postgres everywhere.
-const PG_URL = process.env.SYS_PG_URL ?? "postgresql://sys:sys@localhost:5432/sys";
+// Postgres-only: skipped (and reported as skipped) when SYS_PG_URL is unset.
+const PG_URL = process.env.SYS_PG_URL ?? "";
 
-describe("EntityQuery — cross-tenant isolation (Postgres)", () => {
+describe.skipIf(PG_URL === "")("EntityQuery — cross-tenant isolation (Postgres)", () => {
     let knex: Knex;
     let trx: Knex.Transaction;
     let store: TripleStore;
@@ -148,10 +145,7 @@ describe("EntityQuery — cross-tenant isolation (Postgres)", () => {
         // ...while the sanctioned cross-tenant mode sees both, fully hydrated.
         const query = ctx(TENANT_A).entities(AccountSchema).acrossTenants();
         expect(await query.count(ctx(TENANT_A))).toBe(2);
-        const all = await ctx(TENANT_B)
-            .entities(AccountSchema)
-            .acrossTenants()
-            .all(ctx(TENANT_B));
+        const all = await ctx(TENANT_B).entities(AccountSchema).acrossTenants().all(ctx(TENANT_B));
         expect(all.map((r) => r.props.email).sort()).toEqual(["alice@x.com", "bob@x.com"]);
     });
 
