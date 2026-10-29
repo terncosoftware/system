@@ -1,9 +1,16 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import { getLog } from "@terncosoftware/core";
 import type { Knex } from "knex";
 import { up as migrate001 } from "./migrations/001_init.js";
 import { up as migrate002 } from "./migrations/002_fix_nodes.js";
 import { up as migrate003 } from "./migrations/003_jobs_roles.js";
 import { up as migrate004 } from "./migrations/004_node_encryption.js";
+import {
+    isPresent as hasNodesValueIndex,
+    up as migrate005,
+    upConcurrently as migrate005Concurrently,
+    type PgSession,
+} from "./migrations/005_nodes_value_index.js";
 import { C, T } from "./schema.js";
 
 const log = getLog("sys:data:migrate");
@@ -19,9 +26,18 @@ export const DATA_MIGRATION_LEDGER = "sys_data_migrations";
  */
 const DATA_MIGRATION_LOCK_NAMESPACE = 0x73646174;
 
+/** How often a connect waiting on the ledger lock tries it again. */
+const LOCK_POLL_MS = 250;
+
 interface DataMigration {
     readonly name: string;
     readonly up: (knex: Knex) => Promise<void>;
+    /**
+     * Postgres only, in place of `up`: a migration that cannot run inside a
+     * transaction (CREATE INDEX CONCURRENTLY). It runs on one pinned connection
+     * under a session-level hold of the ledger lock.
+     */
+    readonly upConcurrently?: (session: PgSession) => Promise<void>;
     /**
      * True when a database that predates the ledger already carries this
      * migration's effects. Before the ledger, every connect re-ran every
@@ -76,6 +92,13 @@ const DATA_MIGRATIONS: readonly DataMigration[] = [
             (await hasTables(knex, [T.nodes])) &&
             (await hasColumns(knex, T.nodes, [C.isEncrypted, C.keyId])),
     },
+    {
+        name: "005_nodes_value_index",
+        up: migrate005,
+        upConcurrently: migrate005Concurrently,
+        isPresent: async (knex) =>
+            (await hasTables(knex, [T.nodes])) && (await hasNodesValueIndex(knex, isPg(knex))),
+    },
 ];
 
 /** Every data migration name, in the order they apply. The last is the newest. */
@@ -87,23 +110,99 @@ function isPg(knex: Knex): boolean {
 }
 
 /**
+ * Runs `fn` on one pinned Postgres connection while that session holds the
+ * ledger lock, released (with the connection) when `fn` settles.
+ *
+ * The lock is taken by polling with try-lock, outside any transaction, never
+ * by blocking: a waiter that blocks in a statement, or polls inside an open
+ * transaction, holds a snapshot, and CREATE INDEX CONCURRENTLY under the lock
+ * waits out every older snapshot in the database. The waiter and the build
+ * would then wait on each other forever, unseen by the deadlock detector.
+ */
+async function holdingLedgerLock(
+    knex: Knex,
+    fn: (session: PgSession) => Promise<void>,
+): Promise<void> {
+    const session = (await knex.client.acquireConnection()) as PgSession;
+    try {
+        for (;;) {
+            const [row] = (await knex
+                .select(
+                    knex.raw("pg_try_advisory_lock(?, hashtext(current_database())) AS locked", [
+                        DATA_MIGRATION_LOCK_NAMESPACE,
+                    ]),
+                )
+                .connection(session)) as { locked: boolean }[];
+            if (row?.locked) {
+                break;
+            }
+            await sleep(LOCK_POLL_MS);
+        }
+        try {
+            await fn(session);
+        } finally {
+            await knex
+                .select(
+                    knex.raw("pg_advisory_unlock(?, hashtext(current_database()))", [
+                        DATA_MIGRATION_LOCK_NAMESPACE,
+                    ]),
+                )
+                .connection(session);
+        }
+    } finally {
+        await knex.client.releaseConnection(session);
+    }
+}
+
+/**
  * Runs `fn` with ledger writes serialised across processes. On Postgres that is
- * a transaction holding a transaction-scoped advisory lock, released on commit
- * or rollback, so a migration and its ledger row commit together. SQLite runs
- * `fn` directly: its pool is one connection in one process, and knex's SQLite
- * column DDL opens its own transaction, which would wait forever on a held one.
+ * a transaction on the connection holding the ledger lock, so a migration and
+ * its ledger row commit together. SQLite runs `fn` directly: its pool is one
+ * connection in one process, and knex's SQLite column DDL opens its own
+ * transaction, which would wait forever on a held one.
  */
 async function withLedgerLock(knex: Knex, fn: (db: Knex) => Promise<void>): Promise<void> {
     if (!isPg(knex)) {
         await fn(knex);
         return;
     }
-    await knex.transaction(async (trx) => {
-        await trx.raw("SELECT pg_advisory_xact_lock(?, hashtext(current_database()))", [
-            DATA_MIGRATION_LOCK_NAMESPACE,
-        ]);
-        await fn(trx);
+    await holdingLedgerLock(knex, (session) =>
+        knex.transaction((trx) => fn(trx), { connection: session }),
+    );
+}
+
+/** Runs one pending migration on its pinned session and records it there. */
+async function applyConcurrently(
+    knex: Knex,
+    m: DataMigration & { upConcurrently: (session: PgSession) => Promise<void> },
+): Promise<boolean> {
+    let ran = false;
+    await holdingLedgerLock(knex, async (session) => {
+        const { rows } = await session.query<{ name: string }>(
+            `SELECT name FROM ${DATA_MIGRATION_LEDGER} WHERE name = $1`,
+            [m.name],
+        );
+        if (rows.length > 0) {
+            log.info("skipped", "Data migration applied by a concurrent connect", {
+                migration: m.name,
+            });
+            return;
+        }
+
+        log.debug("applying", "Applying data migration", { migration: m.name });
+        try {
+            await m.upConcurrently(session);
+        } catch (e) {
+            log.error("failed", "Data migration failed", {
+                migration: m.name,
+                error: e instanceof Error ? e.message : String(e),
+            });
+            throw e;
+        }
+        await session.query(`INSERT INTO ${DATA_MIGRATION_LEDGER} (name) VALUES ($1)`, [m.name]);
+        ran = true;
     });
+    return ran;
 }
 
 async function appliedNames(knex: Knex): Promise<Set<string>> {
@@ -162,6 +261,13 @@ export async function runDataMigrations(knex: Knex): Promise<void> {
     const ran: string[] = [];
     for (const m of DATA_MIGRATIONS) {
         if (applied.has(m.name)) {
+            continue;
+        }
+
+        if (m.upConcurrently && isPg(knex)) {
+            if (await applyConcurrently(knex, { ...m, upConcurrently: m.upConcurrently })) {
+                ran.push(m.name);
+            }
             continue;
         }
 
