@@ -46,6 +46,18 @@ interface EdgeRow {
 type RdfTerm = IRI | BlankNode | Literal;
 
 /**
+ * A pattern resolved for a WHERE clause: node ids for IRI and blank terms, and
+ * a literal object kept as its value, since a value can have many nodes.
+ */
+interface PatternIds {
+    subject?: number;
+    predicate?: number;
+    object?: number;
+    objectLiteral?: Literal;
+    graphId?: number;
+}
+
+/**
  * A literal whose lexical `value` already holds ciphertext.  The entity layer
  * produces these for PII properties: it encrypts the plaintext before the value
  * ever reaches the store, then tags the term with the key id so internment can
@@ -59,6 +71,10 @@ interface EncryptedLiteral extends Literal {
     encrypted: true;
     /** Id of the key that produced the ciphertext (persisted for rotation). */
     keyId: string;
+}
+
+function isLiteral(term: RdfTerm): term is Literal {
+    return "termType" in term && term.termType === "Literal";
 }
 
 function isEncryptedLiteral(term: RdfTerm): term is EncryptedLiteral {
@@ -325,7 +341,12 @@ export interface StoreStats {
  *                     RDF default graph use the well-known IRI urn:sys:graph:default.
  *
  * All writes are append-only:
- *   - Nodes are interned on first use and never deleted.
+ *   - IRI and blank nodes are interned on first use and never deleted.
+ *   - Literal nodes are not interned: each edge that asserts a literal gets
+ *     its own literal node.  Looking a value up across every literal before
+ *     writing it cost a scan of the whole table per write, and buys nothing;
+ *     an edge is unique per (subject, predicate, object value, graph), which
+ *     the write checks against the subject's own edges.
  *   - Edges are soft-deleted (is_deleted=true + deleted_at timestamp) rather than
  *     physically removed.  findHistory() returns the full audit trail.
  *
@@ -481,21 +502,9 @@ export class TripleStore {
             return this._insert(ctx, T.nodes, { [C.kind]: "blank", [C.blankId]: term.id });
         }
 
-        // Literal node — deduplicate by (value, dt, lang), populate value_json
+        // A literal gets a node of its own; see the class comment.
         /* v8 ignore next */
         const dtIri = term.datatype?.value ?? "http://www.w3.org/2001/XMLSchema#string";
-        const row = await this._db(ctx)(T.nodes)
-            .where({
-                [C.kind]: "literal",
-                [C.value]: term.value,
-                [C.dt]: dtIri,
-                [C.lang]: term.language ?? null,
-            })
-            .first<NodeRow>();
-        if (row) {
-            return row.id;
-        }
-
         const jsonPayload = makeLiteralJson(term.value, dtIri, term.language);
         const encrypted = isEncryptedLiteral(term);
         return this._insert(ctx, T.nodes, {
@@ -532,20 +541,31 @@ export class TripleStore {
         // plainly.
         const sId = await this._ensureNode(ctx, quad.subject as RdfTerm);
         const pId = await this._ensureNode(ctx, quad.predicate as IRI);
-        const oId = await this._ensureNode(ctx, quad.object as RdfTerm);
 
         const gIsDefault =
             !quad.graph || ("termType" in quad.graph && quad.graph.termType === "DefaultGraph");
         const graphTerm = gIsDefault ? DEFAULT_GRAPH_NODE : (quad.graph as IRI);
         const gId = await this._ensureNode(ctx, graphTerm);
 
-        // Deduplication: skip if an active edge with exactly this quad already exists
-        const existing = await this._db(ctx)(T.edges)
-            .where({ [C.subject]: sId, [C.predicate]: pId, [C.object]: oId, [C.graph]: gId })
-            .where(C.isDeleted, false)
-            .first<{ id: number }>();
-        if (existing) {
+        // Deduplication: skip if an active edge with exactly this quad already
+        // exists. A literal object is matched by value among the subject's own
+        // edges, before its node is written, so a repeated write adds nothing.
+        const object = quad.object as RdfTerm;
+        let existing = this._db(ctx)(T.edges)
+            .where({ [C.subject]: sId, [C.predicate]: pId, [C.graph]: gId })
+            .where(C.isDeleted, false);
+        let oId: number | undefined;
+        if (isLiteral(object)) {
+            existing = existing.whereIn(C.object, this._literalNodes(object));
+        } else {
+            oId = await this._ensureNode(ctx, object);
+            existing = existing.where(C.object, oId);
+        }
+        if (await existing.first<{ id: number }>()) {
             return;
+        }
+        if (oId === undefined) {
+            oId = await this._ensureNode(ctx, object);
         }
 
         await this._db(ctx)(T.edges).insert({
@@ -777,7 +797,7 @@ export class TripleStore {
         if (predicates.length === 0) {
             return 0;
         }
-        const sId = await this._nodeId(ctx, subject as RdfTerm);
+        const sId = await this._nodeId(ctx, subject as IRI | BlankNode);
         if (sId === null) {
             return 0;
         }
@@ -1091,7 +1111,7 @@ export class TripleStore {
     }
 
     private async _rootedTraverse(ctx: ServerContext, opts: RootedTraverseOpts): Promise<IRI[]> {
-        const rootId = await this._nodeId(ctx, opts.root as RdfTerm);
+        const rootId = await this._nodeId(ctx, opts.root as IRI | BlankNode);
         if (rootId === null) {
             return [];
         }
@@ -1114,7 +1134,7 @@ export class TripleStore {
         // Resolve every predicate up front; an unknown predicate means no path.
         const hopPredIds: number[] = [];
         for (const hop of opts.hops) {
-            const pid = await this._nodeId(ctx, hop.predicate as RdfTerm);
+            const pid = await this._nodeId(ctx, hop.predicate as IRI | BlankNode);
             if (pid === null) {
                 return [];
             }
@@ -1155,8 +1175,8 @@ export class TripleStore {
         // Leaf constraints: rdf:type and property-equality, each an extra join.
         let cIdx = 0;
         if (opts.leafType) {
-            const rdfTypeId = await this._nodeId(ctx, makeIRI(RDF_TYPE) as RdfTerm);
-            const typeId = await this._nodeId(ctx, opts.leafType as RdfTerm);
+            const rdfTypeId = await this._nodeId(ctx, makeIRI(RDF_TYPE));
+            const typeId = await this._nodeId(ctx, opts.leafType as IRI | BlankNode);
             if (rdfTypeId === null || typeId === null) {
                 return [];
             }
@@ -1166,22 +1186,34 @@ export class TripleStore {
                     `${a}.${C.predicate} = ${rdfTypeId} AND ${a}.${C.object} = ${typeId} AND ${scope(a)}`,
             );
         }
+        const bindings: (string | number)[] = [];
         for (const eq of opts.leafEq ?? []) {
-            const pid = await this._nodeId(ctx, eq.predicate as RdfTerm);
-            const oid = await this._nodeId(ctx, eq.object as RdfTerm);
-            if (pid === null || oid === null) {
+            const pid = await this._nodeId(ctx, eq.predicate as IRI | BlankNode);
+            if (pid === null) {
                 return [];
+            }
+            let objectClause: string;
+            if (isLiteral(eq.object)) {
+                const lit = this._literalNodes(eq.object).toSQL();
+                objectClause = `${C.object} IN (${lit.sql})`;
+                bindings.push(...(lit.bindings as (string | number)[]));
+            } else {
+                const oid = await this._nodeId(ctx, eq.object as IRI | BlankNode);
+                if (oid === null) {
+                    return [];
+                }
+                objectClause = `${C.object} = ${oid}`;
             }
             const a = `c${cIdx++}`;
             joins.push(
                 `JOIN ${T.edges} ${a} ON ${a}.${C.subject} = ${leafExpr} AND ` +
-                    `${a}.${C.predicate} = ${pid} AND ${a}.${C.object} = ${oid} AND ${scope(a)}`,
+                    `${a}.${C.predicate} = ${pid} AND ${a}.${objectClause} AND ${scope(a)}`,
             );
         }
 
         const whereClause = wheres.length > 0 ? ` WHERE ${wheres.join(" AND ")}` : "";
         const sql = `SELECT DISTINCT ${leafExpr} AS leaf FROM ${base} ${joins.join(" ")}${whereClause}`;
-        const raw = await this._db(ctx).raw(sql);
+        const raw = await this._db(ctx).raw(sql, bindings);
         const rows = (Array.isArray(raw) ? raw : raw.rows) as Array<{ leaf: number }>;
         return this._idsToIris(
             ctx,
@@ -1220,7 +1252,25 @@ export class TripleStore {
 
     // ── Private ───────────────────────────────────────────────────────────────
 
-    private async _nodeId(ctx: ServerContext, term: RdfTerm): Promise<number | null> {
+    /**
+     * The ids of every literal node holding this term's value, as a subquery.
+     * Literals are not interned, so one value can have many nodes; callers
+     * match an edge's object against the set, never look up one id.
+     */
+    private _literalNodes(term: Literal): Knex.QueryBuilder {
+        /* v8 ignore next */
+        const dtIri = term.datatype?.value ?? "http://www.w3.org/2001/XMLSchema#string";
+        return this._knex(T.nodes)
+            .select(C.id)
+            .where({
+                [C.kind]: "literal",
+                [C.value]: term.value,
+                [C.dt]: dtIri,
+                [C.lang]: term.language ?? null,
+            });
+    }
+
+    private async _nodeId(ctx: ServerContext, term: IRI | BlankNode): Promise<number | null> {
         if (isIRI(term)) {
             const node = await this._db(ctx)(T.nodes)
                 .where({ [C.kind]: "iri", [C.iri]: term.value })
@@ -1228,23 +1278,8 @@ export class TripleStore {
             return node?.id ?? null;
         }
 
-        if (term.termType === "BlankNode") {
-            const node = await this._db(ctx)(T.nodes)
-                .where({ [C.kind]: "blank", [C.blankId]: term.id })
-                .first<NodeRow>();
-            return node?.id ?? null;
-        }
-
-        // Literal
-        /* v8 ignore next */
-        const dtIri = term.datatype?.value ?? "http://www.w3.org/2001/XMLSchema#string";
         const node = await this._db(ctx)(T.nodes)
-            .where({
-                [C.kind]: "literal",
-                [C.value]: term.value,
-                [C.dt]: dtIri,
-                [C.lang]: term.language ?? null,
-            })
+            .where({ [C.kind]: "blank", [C.blankId]: term.id })
             .first<NodeRow>();
         return node?.id ?? null;
     }
@@ -1317,18 +1352,8 @@ export class TripleStore {
     private async _patternIds(
         ctx: ServerContext,
         pattern: Partial<QuadPattern>,
-    ): Promise<{
-        subject?: number;
-        predicate?: number;
-        object?: number;
-        graphId?: number;
-    } | null> {
-        const result: {
-            subject?: number;
-            predicate?: number;
-            object?: number;
-            graphId?: number;
-        } = {};
+    ): Promise<PatternIds | null> {
+        const result: PatternIds = {};
 
         if (pattern.subject !== undefined) {
             const id = await this._nodeId(ctx, pattern.subject);
@@ -1345,11 +1370,15 @@ export class TripleStore {
             result.predicate = id;
         }
         if (pattern.object !== undefined) {
-            const id = await this._nodeId(ctx, pattern.object);
-            if (id === null) {
-                return null;
+            if (isLiteral(pattern.object)) {
+                result.objectLiteral = pattern.object;
+            } else {
+                const id = await this._nodeId(ctx, pattern.object);
+                if (id === null) {
+                    return null;
+                }
+                result.object = id;
             }
-            result.object = id;
         }
         if (pattern.graph !== undefined) {
             const id = await this._resolveGraph(ctx, pattern.graph);
@@ -1364,7 +1393,7 @@ export class TripleStore {
     /** Applies resolved pattern IDs as WHERE clauses to a query builder. */
     private _addPatternClauses<R extends object>(
         q: Knex.QueryBuilder<R>,
-        ids: Exclude<Awaited<ReturnType<TripleStore["_patternIds"]>>, null>,
+        ids: PatternIds,
     ): Knex.QueryBuilder<R> {
         if (ids.subject !== undefined) {
             q = q.where(C.subject, ids.subject);
@@ -1374,6 +1403,9 @@ export class TripleStore {
         }
         if (ids.object !== undefined) {
             q = q.where(C.object, ids.object);
+        }
+        if (ids.objectLiteral !== undefined) {
+            q = q.whereIn(C.object, this._literalNodes(ids.objectLiteral));
         }
         if (ids.graphId !== undefined) {
             q = q.where(C.graph, ids.graphId);
