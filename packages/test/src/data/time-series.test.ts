@@ -353,20 +353,27 @@ for (const db of providers) {
             expect(rows[0].deleted_at).toBeNull();
         });
 
-        it("insert is idempotent: duplicate active quad is not written twice", async () => {
+        const writeTwice = async (s: TripleStore, c: ServerContext): Promise<void> => {
+            for (let i = 0; i < 2; i++) {
+                await s.insert(c, {
+                    subject: EX("s"),
+                    predicate: TYPE,
+                    object: EX("T"),
+                    graph: GRAPH,
+                });
+            }
+        };
+
+        it("insert persists a repeated quad as a second edge", async () => {
             const base = await countEdges(trx as unknown as Knex);
-            await store.insert(ctx, {
-                subject: EX("s"),
-                predicate: TYPE,
-                object: EX("T"),
-                graph: GRAPH,
-            });
-            await store.insert(ctx, {
-                subject: EX("s"),
-                predicate: TYPE,
-                object: EX("T"),
-                graph: GRAPH,
-            });
+            await writeTwice(store, ctx);
+            expect((await countEdges(trx as unknown as Knex)) - base).toBe(2);
+        });
+
+        it("insert skips an active duplicate when the store dedupes quads", async () => {
+            const deduping = new TripleStore(knex, { dedupeQuads: true });
+            const base = await countEdges(trx as unknown as Knex);
+            await writeTwice(deduping, buildServerContext(deduping, { trx }));
             expect((await countEdges(trx as unknown as Knex)) - base).toBe(1);
         });
     });

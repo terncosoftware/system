@@ -344,9 +344,11 @@ export interface StoreStats {
  *   - IRI and blank nodes are interned on first use and never deleted.
  *   - Literal nodes are not interned: each edge that asserts a literal gets
  *     its own literal node.  Looking a value up across every literal before
- *     writing it cost a scan of the whole table per write, and buys nothing;
- *     an edge is unique per (subject, predicate, object value, graph), which
- *     the write checks against the subject's own edges.
+ *     writing it cost a scan of the whole table per write, and buys nothing.
+ *   - Every write persists: asserting a quad that is already active adds
+ *     another edge, stamped with its own created_at.  Setting a user's name
+ *     to the same value twice records two writes.  `dedupeQuads` restores
+ *     the old skip-if-present check; it is off by default.
  *   - Edges are soft-deleted (is_deleted=true + deleted_at timestamp) rather than
  *     physically removed.  findHistory() returns the full audit trail.
  *
@@ -360,6 +362,14 @@ export interface StoreStats {
  * this.  Only the entity infrastructure, migrations, documented host-side
  * `get store()` seams, and sandbox demos use it directly.
  */
+export interface TripleStoreOptions {
+    /**
+     * Skip a write whose quad is already active, at the cost of a lookup per
+     * write. Off by default: every write persists as its own edge.
+     */
+    dedupeQuads?: boolean;
+}
+
 export class TripleStore {
     private readonly _knex: Knex;
 
@@ -387,8 +397,11 @@ export class TripleStore {
      */
     private static _txTail: Promise<unknown> = Promise.resolve();
 
-    constructor(knex: Knex) {
+    private readonly _dedupeQuads: boolean;
+
+    constructor(knex: Knex, options: TripleStoreOptions = {}) {
         this._knex = knex;
+        this._dedupeQuads = options.dedupeQuads ?? false;
     }
 
     /** Direct access to the underlying Knex instance for advanced queries. */
@@ -521,9 +534,8 @@ export class TripleStore {
     // ── Write ─────────────────────────────────────────────────────────────────
 
     /**
-     * Asserts a quad.  Idempotent: if an identical active quad already exists,
-     * nothing is written.  Restores a previously soft-deleted quad by creating
-     * a fresh edge row (the soft-deleted row is left as history).
+     * Asserts a quad as a new edge row, even when an identical quad is
+     * already active (unless the store was built with `dedupeQuads`).
      *
      * Quads with `graph: DEFAULT_GRAPH` or no graph are stored under the
      * well-known IRI urn:sys:graph:default so `graph` is never null.
@@ -547,26 +559,11 @@ export class TripleStore {
         const graphTerm = gIsDefault ? DEFAULT_GRAPH_NODE : (quad.graph as IRI);
         const gId = await this._ensureNode(ctx, graphTerm);
 
-        // Deduplication: skip if an active edge with exactly this quad already
-        // exists. A literal object is matched by value among the subject's own
-        // edges, before its node is written, so a repeated write adds nothing.
         const object = quad.object as RdfTerm;
-        let existing = this._db(ctx)(T.edges)
-            .where({ [C.subject]: sId, [C.predicate]: pId, [C.graph]: gId })
-            .where(C.isDeleted, false);
-        let oId: number | undefined;
-        if (isLiteral(object)) {
-            existing = existing.whereIn(C.object, this._literalNodes(object));
-        } else {
-            oId = await this._ensureNode(ctx, object);
-            existing = existing.where(C.object, oId);
-        }
-        if (await existing.first<{ id: number }>()) {
+        if (this._dedupeQuads && (await this._isActive(ctx, sId, pId, object, gId))) {
             return;
         }
-        if (oId === undefined) {
-            oId = await this._ensureNode(ctx, object);
-        }
+        const oId = await this._ensureNode(ctx, object);
 
         await this._db(ctx)(T.edges).insert({
             [C.subject]: sId,
@@ -1251,6 +1248,33 @@ export class TripleStore {
     }
 
     // ── Private ───────────────────────────────────────────────────────────────
+
+    /**
+     * Whether an active edge already asserts this quad: the `dedupeQuads`
+     * check. A literal object is matched by value, since a value can have
+     * many nodes.
+     */
+    private async _isActive(
+        ctx: ServerContext,
+        sId: number,
+        pId: number,
+        object: RdfTerm,
+        gId: number,
+    ): Promise<boolean> {
+        let q = this._db(ctx)(T.edges)
+            .where({ [C.subject]: sId, [C.predicate]: pId, [C.graph]: gId })
+            .where(C.isDeleted, false);
+        if (isLiteral(object)) {
+            q = q.whereIn(C.object, this._literalNodes(object));
+        } else {
+            const oId = await this._nodeId(ctx, object);
+            if (oId === null) {
+                return false;
+            }
+            q = q.where(C.object, oId);
+        }
+        return (await q.first<{ id: number }>()) !== undefined;
+    }
 
     /**
      * The ids of every literal node holding this term's value, as a subquery.
