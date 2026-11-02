@@ -8,19 +8,12 @@ import {
     listKeyOf,
     normalizeListQuery,
 } from "@terncosoftware/core/list";
+import type { TopicParams } from "@terncosoftware/core/topics";
 import type React from "react";
 import { useEffect, useId, useMemo, useState } from "react";
 import { useListTopic, useTileCommands } from "./hooks.js";
+import { type ListColumn, ListTable } from "./ListTable.js";
 import type { TileProps } from "./types.js";
-
-export interface ListColumn<T extends ListRow> {
-    readonly field: string;
-    readonly label: string;
-    readonly sortable?: boolean;
-    /** Numbers and dates usually read best aligned to the end. */
-    readonly align?: "start" | "end";
-    readonly render?: (row: T) => React.ReactNode;
-}
 
 /** One entry of the filter menu: a label and the filters it applies. */
 export interface ListFilterChoice {
@@ -31,6 +24,7 @@ export interface ListFilterChoice {
 
 export interface ListTileProps<T extends ListRow> extends TileProps {
     readonly topic: string;
+    readonly params?: TopicParams;
     readonly schema: ListSchema;
     readonly columns: readonly ListColumn<T>[];
     /** What the rows are, singular and plural: { one: "user", other: "users" }. */
@@ -82,14 +76,6 @@ function nextSort(current: readonly ListSort[], field: string): ListSort[] {
     return [{ field, direction: "asc" }];
 }
 
-function ariaSort(sort: readonly ListSort[], field: string): "ascending" | "descending" | "none" {
-    const head = sort[0];
-    if (head?.field !== field) {
-        return "none";
-    }
-    return head.direction === "asc" ? "ascending" : "descending";
-}
-
 const COUNT = new Intl.NumberFormat();
 
 /**
@@ -101,14 +87,23 @@ const COUNT = new Intl.NumberFormat();
  * dashboard and anything else on the dispatch can drive the tile the same way.
  */
 export function ListTile<T extends ListRow>(props: ListTileProps<T>): React.ReactElement {
-    const { tile, topic, schema, columns, noun, filterChoices = NO_CHOICES, pageSize } = props;
+    const {
+        tile,
+        topic,
+        params,
+        schema,
+        columns,
+        noun,
+        filterChoices = NO_CHOICES,
+        pageSize,
+    } = props;
     const commands = useTileCommands(tile);
     const settings = useMemo(() => readSettings(tile.settings.list), [tile.settings.list]);
     const query = useMemo(
         () => buildQuery(settings, schema, filterChoices, pageSize),
         [settings, schema, filterChoices, pageSize],
     );
-    const live = useListTopic<T>(tile, topic, schema, query);
+    const live = useListTopic<T>(tile, { topic, params, schema, query });
     const [failed, setFailed] = useState<string | null>(null);
     const ids = useId();
 
@@ -142,7 +137,6 @@ export function ListTile<T extends ListRow>(props: ListTileProps<T>): React.Reac
     const filtered = query.search !== "" || query.filters.length > 0;
     const first = page && page.rows.length > 0 ? page.offset + 1 : 0;
     const last = page ? page.offset + page.rows.length : 0;
-    const changed = new Set(live.changed);
     const word = total === 1 ? noun.one : noun.other;
 
     return (
@@ -198,80 +192,27 @@ export function ListTile<T extends ListRow>(props: ListTileProps<T>): React.Reac
                 </p>
             )}
 
-            <div className="dboard-list-scroll">
-                <table className="dboard-list-table" aria-busy={live.status === "loading"}>
-                    <caption className="dboard-visually-hidden">
-                        {tile.title}, {first}-{last} of {total}
-                    </caption>
-                    <thead>
-                        <tr>
-                            {columns.map((column) => (
-                                <th
-                                    key={column.field}
-                                    scope="col"
-                                    aria-sort={
-                                        column.sortable
-                                            ? ariaSort(query.sort, column.field)
-                                            : undefined
-                                    }
-                                    data-align={column.align ?? "start"}
-                                >
-                                    {column.sortable ? (
-                                        <button
-                                            type="button"
-                                            className="dboard-list-sort"
-                                            onClick={() =>
-                                                save({
-                                                    sort: nextSort(query.sort, column.field),
-                                                    offset: 0,
-                                                })
-                                            }
-                                            data-testid={`dashboard-list-sort-${tile.tileId}-${column.field}`}
-                                        >
-                                            {column.label}
-                                            <span
-                                                className="dboard-list-sort-mark"
-                                                aria-hidden="true"
-                                            />
-                                        </button>
-                                    ) : (
-                                        column.label
-                                    )}
-                                </th>
-                            ))}
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {page?.rows.map((row) => {
-                            const key = listKeyOf(row, schema);
-                            return (
-                                <tr
-                                    key={key}
-                                    data-key={key}
-                                    data-fresh={changed.has(key) ? "true" : undefined}
-                                    data-testid={`dashboard-list-row-${tile.tileId}`}
-                                >
-                                    {columns.map((column) => (
-                                        <td key={column.field} data-align={column.align ?? "start"}>
-                                            {column.render
-                                                ? column.render(row)
-                                                : String(row[column.field] ?? "")}
-                                        </td>
-                                    ))}
-                                </tr>
-                            );
-                        })}
-                    </tbody>
-                </table>
-                {page && page.rows.length === 0 && (
-                    <p className="dboard-list-empty">
-                        {filtered ? `No ${noun.other} match.` : `No ${noun.other} yet.`}
-                    </p>
-                )}
-                {!page && live.status === "loading" && (
-                    <p className="dboard-list-empty">Loading {noun.other}</p>
-                )}
-            </div>
+            <ListTable<T>
+                label={`${tile.title}, ${first}-${last} of ${total}`}
+                columns={columns}
+                rows={page?.rows ?? []}
+                rowKey={(row) => listKeyOf(row, schema)}
+                sort={query.sort}
+                onSort={(field) => save({ sort: nextSort(query.sort, field), offset: 0 })}
+                fresh={live.changed}
+                busy={live.status === "loading"}
+                empty={
+                    page
+                        ? filtered
+                            ? `No ${noun.other} match.`
+                            : `No ${noun.other} yet.`
+                        : live.status === "loading"
+                          ? `Loading ${noun.other}`
+                          : undefined
+                }
+                rowTestId={() => `dashboard-list-row-${tile.tileId}`}
+                sortTestId={(field) => `dashboard-list-sort-${tile.tileId}-${field}`}
+            />
 
             <nav className="dboard-list-pager" aria-label={`${tile.title} pages`}>
                 <span

@@ -8,35 +8,11 @@ import {
     type ListWindow,
     listKeyOf,
 } from "@terncosoftware/core/list";
+import type { TopicParams } from "@terncosoftware/core/topics";
+import type { TopicViewStatus } from "./SnapshotTopicView.js";
+import type { TopicHandle, TopicSource } from "./TopicSource.js";
 
-/** One view of a live list topic. Two tiles on the same topic hold two views. */
-export interface ListTopicSubscription {
-    readonly topic: string;
-    /** Unique per view on one connection, so each view keeps its own query. */
-    readonly view: string;
-    readonly query: ListQuery;
-}
-
-export interface ListTopicListener {
-    frame(frame: ListFrame): void;
-    error(message: string): void;
-}
-
-export interface ListTopicHandle {
-    /** Replace the view's query. The source answers with a fresh window. */
-    update(query: ListQuery): void;
-    close(): void;
-}
-
-/**
- * How a host delivers list topics to tiles. The host owns the connection,
- * authentication and addressing; a tile only ever sees frames.
- */
-export interface ListTopicSource {
-    open(subscription: ListTopicSubscription, listener: ListTopicListener): ListTopicHandle;
-}
-
-export type ListViewStatus = "loading" | "live" | "error";
+export type ListViewStatus = TopicViewStatus;
 
 export interface ListViewSnapshot<T extends ListRow = ListRow> {
     readonly status: ListViewStatus;
@@ -55,16 +31,17 @@ export interface ListViewSnapshot<T extends ListRow = ListRow> {
  */
 export class ListTopicView<T extends ListRow = ListRow> {
     private _state: ListState<T> | null = null;
-    private _handle: ListTopicHandle | null = null;
+    private _handle: TopicHandle | null = null;
     /** True while the page on screen answers a query other than the current one. */
     private _requeried = false;
     private _snapshot: ListViewSnapshot<T>;
     private readonly _listeners = new Set<() => void>();
 
     constructor(
-        private readonly _source: ListTopicSource,
+        private readonly _source: TopicSource,
         private readonly _topic: string,
         private readonly _view: string,
+        private readonly _params: TopicParams,
         private readonly _schema: ListSchema,
         query: ListQuery,
     ) {
@@ -85,7 +62,12 @@ export class ListTopicView<T extends ListRow = ListRow> {
             return;
         }
         this._handle = this._source.open(
-            { topic: this._topic, view: this._view, query: this._snapshot.query },
+            {
+                topic: this._topic,
+                view: this._view,
+                params: this._params,
+                query: this._snapshot.query,
+            },
             {
                 frame: (frame) => this._onFrame(frame as ListFrame<T>),
                 error: (message) => this._set({ status: "error", error: message, changed: [] }),

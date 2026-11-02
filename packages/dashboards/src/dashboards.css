@@ -192,6 +192,60 @@
     min-width: 0;
     overflow: auto;
     border-top: 1px solid var(--dboard-border);
+    container-type: inline-size;
+}
+
+:where(.dboard-list-phone-sort) {
+    display: none;
+}
+
+/* Narrow: each row is a card that keeps every field, labelled, and a menu sorts. */
+@container (max-width: 600px) {
+    :where(.dboard-list-phone-sort) {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 0;
+    }
+
+    :where(.dboard-list-table thead) {
+        display: none;
+    }
+
+    :where(.dboard-list-table, .dboard-list-table tbody, .dboard-list-table tr) {
+        display: block;
+    }
+
+    :where(.dboard-list-table tr) {
+        padding: 8px 0;
+        border-bottom: 1px solid var(--dboard-border);
+    }
+
+    :where(.dboard-list-table td) {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 2px 0;
+        border-bottom: 0;
+        white-space: normal;
+        text-align: end;
+    }
+
+    :where(.dboard-list-table td)::before {
+        content: attr(data-label);
+        color: var(--dboard-text-2);
+        text-align: start;
+    }
+
+    :where(.dboard-list-table td[data-title="true"]) {
+        font-weight: 600;
+        text-align: start;
+    }
+
+    :where(.dboard-list-table td[data-title="true"])::before,
+    :where(.dboard-list-table td[data-phone="hide"]) {
+        display: none;
+    }
 }
 
 :where(.dboard-list-table) {
