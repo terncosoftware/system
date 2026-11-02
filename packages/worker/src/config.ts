@@ -66,6 +66,14 @@ export const REAPER_STALE_TIMEOUT_MS = 10 * 60 * 1_000; // 10 minutes
  */
 export const REAPER_SCHEDULE = "PT1M"; // every 1 minute
 
+/**
+ * A due `pending` run still unclaimed after this many of its job's schedule
+ * intervals is overdue: no process registers its handler or holds its role.
+ * The reaper logs it as an error once and flags it for JobMetric's
+ * overduePendingRuns count.
+ */
+export const REAPER_OVERDUE_INTERVALS = 10;
+
 // ── HistoryPruner defaults ────────────────────────────────────────────────────
 
 /**
