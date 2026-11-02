@@ -151,17 +151,27 @@ for (const provider of providers) {
             return rows.length;
         };
 
-        it("writes a repeated literal quad once, edge and node", async () => {
-            const q = {
-                subject: EX("s"),
-                predicate: EX("p"),
-                object: literal("once"),
-                graph: DEFAULT_GRAPH,
-            };
-            await store.insert(ctx, q);
-            await store.insert(ctx, q);
-            expect(await store.find(ctx, { subject: EX("s"), graph: null })).toHaveLength(1);
-            expect(await literalNodeCount("once")).toBe(1);
+        const repeatedLiteral = {
+            subject: EX("s"),
+            predicate: EX("p"),
+            object: literal("twice"),
+            graph: DEFAULT_GRAPH,
+        };
+
+        it("persists a repeated literal write, each with a node of its own", async () => {
+            await store.insert(ctx, repeatedLiteral);
+            await store.insert(ctx, repeatedLiteral);
+            expect(await store.find(ctx, { subject: EX("s"), graph: null })).toHaveLength(2);
+            expect(await literalNodeCount("twice")).toBe(2);
+        });
+
+        it("writes a repeated literal once, edge and node, when the store dedupes quads", async () => {
+            const deduping = new TripleStore(knex, { dedupeQuads: true });
+            const dctx = buildServerContext(deduping, { trx });
+            await deduping.insert(dctx, repeatedLiteral);
+            await deduping.insert(dctx, repeatedLiteral);
+            expect(await deduping.find(dctx, { subject: EX("s"), graph: null })).toHaveLength(1);
+            expect(await literalNodeCount("twice")).toBe(1);
         });
 
         it("gives each subject its own node for a shared value, and matches them all by value", async () => {
@@ -262,7 +272,7 @@ for (const provider of providers) {
             expect((found[0].subject as BlankNode).id).toBe("anon1");
         });
 
-        it("de-duplicates identical quads on insert", async () => {
+        it("persists every write of an identical quad", async () => {
             const q: Quad = {
                 subject: EX("s"),
                 predicate: RDF_TYPE,
@@ -270,9 +280,25 @@ for (const provider of providers) {
                 graph: GRAPH,
             };
             await store.insert(ctx, q);
-            await store.insert(ctx, q); // should be ignored (onConflict ignore)
+            await store.insert(ctx, q);
 
             const found = await store.find(ctx, { subject: EX("s"), graph: GRAPH });
+            expect(found).toHaveLength(2);
+        });
+
+        it("de-duplicates identical quads when the store dedupes quads", async () => {
+            const deduping = new TripleStore(knex, { dedupeQuads: true });
+            const dctx = buildServerContext(deduping, { trx });
+            const q: Quad = {
+                subject: EX("s"),
+                predicate: RDF_TYPE,
+                object: OWL_THING,
+                graph: GRAPH,
+            };
+            await deduping.insert(dctx, q);
+            await deduping.insert(dctx, q);
+
+            const found = await deduping.find(dctx, { subject: EX("s"), graph: GRAPH });
             expect(found).toHaveLength(1);
         });
 
