@@ -144,6 +144,48 @@ for (const provider of providers) {
             expect(en).not.toBe(fr);
         });
 
+        // ── Literals are not interned ─────────────────────────────────────────
+
+        const literalNodeCount = async (value: string): Promise<number> => {
+            const rows = await trx("nodes").where({ kind: "literal", value }).select("id");
+            return rows.length;
+        };
+
+        it("writes a repeated literal quad once, edge and node", async () => {
+            const q = {
+                subject: EX("s"),
+                predicate: EX("p"),
+                object: literal("once"),
+                graph: DEFAULT_GRAPH,
+            };
+            await store.insert(ctx, q);
+            await store.insert(ctx, q);
+            expect(await store.find(ctx, { subject: EX("s"), graph: null })).toHaveLength(1);
+            expect(await literalNodeCount("once")).toBe(1);
+        });
+
+        it("gives each subject its own node for a shared value, and matches them all by value", async () => {
+            for (const s of ["a", "b"]) {
+                await store.insert(ctx, {
+                    subject: EX(s),
+                    predicate: EX("p"),
+                    object: literal("shared"),
+                    graph: DEFAULT_GRAPH,
+                });
+            }
+            expect(await literalNodeCount("shared")).toBe(2);
+
+            const found = await store.find(ctx, { object: literal("shared"), graph: null });
+            expect(found.map((q) => q.subject.value).sort()).toEqual([
+                EX("a").value,
+                EX("b").value,
+            ]);
+            expect(await store.delete(ctx, { object: literal("shared"), graph: null })).toBe(2);
+            expect(await store.find(ctx, { object: literal("shared"), graph: null })).toHaveLength(
+                0,
+            );
+        });
+
         // ── insert / find ─────────────────────────────────────────────────────
 
         it("inserts a triple and finds it by subject", async () => {
@@ -540,13 +582,6 @@ describe("TripleStore: find/delete with non-existent nodes return early", () => 
                 const b = blank("idempotent-blank");
                 await store.ensureNode(ctx, b);
                 const id2 = await store.ensureNode(ctx, b);
-                expect(id2).toBeGreaterThan(0);
-            });
-
-            it("ensureNode for literal is idempotent (line 115 existing row branch)", async () => {
-                const lit = literal("hello", "http://www.w3.org/2001/XMLSchema#string");
-                await store.ensureNode(ctx, lit);
-                const id2 = await store.ensureNode(ctx, lit);
                 expect(id2).toBeGreaterThan(0);
             });
 

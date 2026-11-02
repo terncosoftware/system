@@ -192,7 +192,7 @@ for (const db of providers) {
             expect(cipher.decrypt(KEY_ID, objectValue)).toBe("new@example.com");
         });
 
-        it("test deterministic ciphertext — equal plaintext interns one node", async () => {
+        it("test deterministic ciphertext — equal plaintext stores equal ciphertext", async () => {
             const { es, store, knex, cipher } = env;
             const ctx = buildServerContext(store, { cipher });
 
@@ -211,8 +211,10 @@ for (const db of providers) {
                 .where({ kind: "literal" })
                 .where("is_encrypted", true)
                 .select<{ value: string }[]>("value");
-            // Deterministic cipher ⇒ identical plaintext yields one interned node.
-            expect(rows).toHaveLength(1);
+            // Deterministic cipher ⇒ identical plaintext yields identical ciphertext,
+            // one literal node per entity.
+            expect(rows).toHaveLength(2);
+            expect(rows[0]?.value).toBe(rows[1]?.value);
         });
 
         it("test writing pii without a cipher throws rather than storing cleartext", async () => {
