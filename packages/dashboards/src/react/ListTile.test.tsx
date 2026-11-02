@@ -168,6 +168,22 @@ describe(ListTile, () => {
         );
         expect(names("recent")).toEqual(["Grace"]);
         expect(names("admins")).toEqual(["Edsger", "Ada"]);
+        expect(
+            screen.getByTestId("dashboard-list-recent").querySelector(".dboard-list-total")
+                ?.textContent,
+        ).toBe("1 member matches");
+        expect(
+            screen.getByTestId("dashboard-list-admins").querySelector(".dboard-list-total")
+                ?.textContent,
+        ).toBe("2 members match");
+    });
+
+    it("shows no count or range while the topic has not answered", async () => {
+        source = new MemoryTopicSource();
+        mount();
+        await screen.findAllByText("Unknown topic: members");
+        expect(screen.queryByTestId("dashboard-list-total-recent")).toBeNull();
+        expect(screen.getByTestId("dashboard-list-range-recent").textContent).toBe("");
     });
 
     it("keeps the viewer's query and size for the next visit", async () => {

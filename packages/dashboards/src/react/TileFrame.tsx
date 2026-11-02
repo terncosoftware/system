@@ -152,7 +152,9 @@ export function TileFrame(props: TileFrameProps): React.ReactElement {
             data-cols={size.cols}
             data-rows={size.rows}
             data-resizing={preview ? "true" : undefined}
-            style={{ "--dboard-cols": size.cols, "--dboard-rows": size.rows } as React.CSSProperties}
+            style={
+                { "--dboard-cols": size.cols, "--dboard-rows": size.rows } as React.CSSProperties
+            }
         >
             <header className="dboard-tile-header">
                 <h2 className="dboard-tile-title" id={titleId}>

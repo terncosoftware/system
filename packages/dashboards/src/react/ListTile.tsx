@@ -138,17 +138,25 @@ export function ListTile<T extends ListRow>(props: ListTileProps<T>): React.Reac
     const first = page && page.rows.length > 0 ? page.offset + 1 : 0;
     const last = page ? page.offset + page.rows.length : 0;
     const word = total === 1 ? noun.one : noun.other;
+    const verb = total === 1 ? "matches" : "match";
 
     return (
         <div className="dboard-list" data-testid={`dashboard-list-${tile.tileId}`}>
+            {/* No count until the topic answers: a placeholder reads as a figure. */}
             <p className="dboard-list-total" aria-live="polite" aria-atomic="true">
-                <span
-                    className="dboard-list-count"
-                    data-testid={`dashboard-list-total-${tile.tileId}`}
-                >
-                    {page ? COUNT.format(total) : "-"}
-                </span>{" "}
-                <span className="dboard-list-noun">{filtered ? `${word} match` : word}</span>
+                {page && (
+                    <>
+                        <span
+                            className="dboard-list-count"
+                            data-testid={`dashboard-list-total-${tile.tileId}`}
+                        >
+                            {COUNT.format(total)}
+                        </span>{" "}
+                        <span className="dboard-list-noun">
+                            {filtered ? `${word} ${verb}` : word}
+                        </span>
+                    </>
+                )}
             </p>
 
             <div className="dboard-list-controls">
@@ -219,7 +227,7 @@ export function ListTile<T extends ListRow>(props: ListTileProps<T>): React.Reac
                     className="dboard-list-range"
                     data-testid={`dashboard-list-range-${tile.tileId}`}
                 >
-                    {first}-{last} of {COUNT.format(total)}
+                    {page && `${first}-${last} of ${COUNT.format(total)}`}
                 </span>
                 <button
                     type="button"
