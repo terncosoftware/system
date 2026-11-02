@@ -176,10 +176,9 @@ for (const provider of providers) {
             expect(await literalNodeCount("shared")).toBe(2);
 
             const found = await store.find(ctx, { object: literal("shared"), graph: null });
-            expect(found.map((q) => q.subject.value).sort()).toEqual([
-                EX("a").value,
-                EX("b").value,
-            ]);
+            const subjects = found.map((q) => q.subject);
+            expect(subjects).toHaveLength(2);
+            expect(subjects).toEqual(expect.arrayContaining([EX("a"), EX("b")]));
             expect(await store.delete(ctx, { object: literal("shared"), graph: null })).toBe(2);
             expect(await store.find(ctx, { object: literal("shared"), graph: null })).toHaveLength(
                 0,
