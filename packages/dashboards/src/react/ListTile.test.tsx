@@ -5,7 +5,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import type React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DashboardRuntime } from "../DashboardRuntime.js";
-import { MemoryListTopicSource } from "../MemoryListTopicSource.js";
+import { MemoryTopicSource } from "../MemoryTopicSource.js";
 import { DashboardCommands } from "../messages.js";
 import type { DashboardDefinition } from "../model.js";
 import { MemoryTilePreferenceStore } from "../preferences.js";
@@ -84,21 +84,22 @@ function names(tileId: string): string[] {
 }
 
 describe(ListTile, () => {
-    let source: MemoryListTopicSource<Member>;
+    let source: MemoryTopicSource;
     let dispatch: InMemoryDispatch;
     let runtime: DashboardRuntime;
     let preferences: MemoryTilePreferenceStore;
 
     function mount(): void {
         render(
-            <DashboardHostProvider runtime={runtime} lists={source}>
+            <DashboardHostProvider runtime={runtime} topics={source}>
                 <Dashboard definition={definition} userId="viewer" />
             </DashboardHostProvider>,
         );
     }
 
     beforeEach(() => {
-        source = new MemoryListTopicSource<Member>(TOPIC, schema, [
+        source = new MemoryTopicSource();
+        source.setList<Member>(TOPIC, schema, [
             member("1", "Ada", "2026-01-01T00:00:00Z", true),
             member("2", "Grace", "2026-02-01T00:00:00Z"),
             member("3", "Alan", "2026-03-01T00:00:00Z"),
@@ -134,7 +135,10 @@ describe(ListTile, () => {
         expect(screen.getByTestId("dashboard-list-total-admins").textContent).toBe("2");
 
         act(() => {
-            source.set([...source.rows(), member("5", "Barbara", "2026-05-01T00:00:00Z", true)]);
+            source.setList(TOPIC, schema, [
+                ...source.rows(TOPIC),
+                member("5", "Barbara", "2026-05-01T00:00:00Z", true),
+            ]);
         });
 
         expect(names("recent")).toEqual(["Barbara", "Edsger", "Alan"]);

@@ -11,6 +11,7 @@ const ROOT = path.resolve(__dirname);
 const ALLOWED_IMPORTS = [
     /^\.{1,2}\//,
     /^@terncosoftware\/core\/list$/,
+    /^@terncosoftware\/core\/topics$/,
     /^@terncosoftware\/core-ui$/,
     /^react$/,
     /^react\/jsx-runtime$/,

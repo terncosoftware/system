@@ -27,6 +27,12 @@
             "default": "./dist/list/index.js",
             "types": "./dist/list/index.d.ts",
             "import": "./dist/list/index.js"
+        },
+        "./topics": {
+            "source": "./src/topics/index.ts",
+            "default": "./dist/topics/index.js",
+            "types": "./dist/topics/index.d.ts",
+            "import": "./dist/topics/index.js"
         }
     },
     "main": "./dist/index.js",

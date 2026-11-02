@@ -8,6 +8,7 @@
  * the browser run the same function on the same page, so they agree without
  * the server remembering what it sent.
  */
+import { fingerprintOf, fnv1a } from "./fingerprint.js";
 import { applyListQuery, compareListRows, listKeyOf, matchesListQuery } from "./query.js";
 import type {
     ListChange,
@@ -51,16 +52,6 @@ export function diffListRows<T extends ListRow>(
         changes.push({ key, before: was, after: null });
     }
     return changes.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-}
-
-/** 32-bit FNV-1a, enough to tell two states of one list apart. */
-function fnv1a(text: string, seed = 0x811c9dc5): number {
-    let hash = seed;
-    for (let i = 0; i < text.length; i++) {
-        hash ^= text.charCodeAt(i);
-        hash = Math.imul(hash, 0x01000193) >>> 0;
-    }
-    return hash;
 }
 
 /**
@@ -248,4 +239,15 @@ export function applyListFrame<T extends ListRow>(
         }
     }
     return { version: frame.to, window };
+}
+
+/**
+ * The frame for a page read straight from a store, which answers the page and
+ * its total but not the whole list. Its version fingerprints exactly that, so
+ * a server re-reading the page sends it again only when the version moved.
+ */
+export function listPageFrame<T extends ListRow>(
+    window: ListWindow<T>,
+): Extract<ListFrame<T>, { type: "window" }> {
+    return { type: "window", version: fingerprintOf(window), window };
 }

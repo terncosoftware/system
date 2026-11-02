@@ -14,6 +14,7 @@ export default defineConfig({
     resolve: {
         alias: {
             "@terncosoftware/core/list": path.join(pkg("core"), "list"),
+            "@terncosoftware/core/topics": path.join(pkg("core"), "topics"),
             "@terncosoftware/core-ui": pkg("core-ui"),
         },
     },

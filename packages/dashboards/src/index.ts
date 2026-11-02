@@ -2,8 +2,8 @@
 //
 // A dashboard knows only tile types. Tiles change through dispatch commands,
 // so a tile, a toolbar or a test drives them the same way, and each viewer's
-// changes are kept per dashboard. List tiles read live list topics through a
-// source the host supplies.
+// changes are kept per dashboard. Tiles read live topics (lists, snapshots and
+// feeds) through one source the host supplies.
 
 export {
     type CommandRegistrar,
@@ -11,16 +11,9 @@ export {
     type DashboardRuntimeOptions,
     MountedDashboard,
 } from "./DashboardRuntime.js";
-export {
-    type ListTopicHandle,
-    type ListTopicListener,
-    type ListTopicSource,
-    type ListTopicSubscription,
-    ListTopicView,
-    type ListViewSnapshot,
-    type ListViewStatus,
-} from "./ListTopicView.js";
-export { MemoryListTopicSource } from "./MemoryListTopicSource.js";
+export { FeedTopicView, type FeedViewState } from "./FeedTopicView.js";
+export { ListTopicView, type ListViewSnapshot, type ListViewStatus } from "./ListTopicView.js";
+export { MemoryTopicSource } from "./MemoryTopicSource.js";
 export {
     type ConfigureTileArgs,
     DashboardCommands,
@@ -45,4 +38,10 @@ export {
     type PreferenceScope,
     type TilePreferenceStore,
 } from "./preferences.js";
+export {
+    SnapshotTopicView,
+    type SnapshotViewState,
+    type TopicViewStatus,
+} from "./SnapshotTopicView.js";
 export { type TileType, TileTypeRegistry } from "./TileTypeRegistry.js";
+export type { TopicHandle, TopicListener, TopicSource, TopicSubscription } from "./TopicSource.js";

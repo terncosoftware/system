@@ -1,12 +1,12 @@
 import type React from "react";
 import { createContext, useContext } from "react";
 import type { DashboardRuntime } from "../DashboardRuntime.js";
-import type { ListTopicSource } from "../ListTopicView.js";
+import type { TopicSource } from "../TopicSource.js";
 
 export interface DashboardHostValue {
     readonly runtime: DashboardRuntime;
-    /** Where list tiles read their topics from. */
-    readonly lists: ListTopicSource;
+    /** Where tiles read their topics from. */
+    readonly topics: TopicSource;
 }
 
 const DashboardHostContext = createContext<DashboardHostValue | null>(null);
@@ -17,9 +17,9 @@ export interface DashboardHostProviderProps extends DashboardHostValue {
 
 /** Provides the runtime and data sources to every dashboard below it. */
 export function DashboardHostProvider(props: DashboardHostProviderProps): React.ReactElement {
-    const { runtime, lists, children } = props;
+    const { runtime, topics, children } = props;
     return (
-        <DashboardHostContext.Provider value={{ runtime, lists }}>
+        <DashboardHostContext.Provider value={{ runtime, topics }}>
             {children}
         </DashboardHostContext.Provider>
     );
