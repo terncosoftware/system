@@ -10,9 +10,14 @@
  *   - consecutiveFailures — count of the most-recent terminal runs that failed
  *                          or went dead, back to (not including) the last
  *                          success. Resets to 0 on any success.
+ *   - overduePendingRuns  — pending runs the stale-run reaper stamped overdue:
+ *                          still unclaimed long past their due time, because
+ *                          no process registers the handler or holds the role.
+ *                          Alarm on any value above 0.
  *
- * computeJobMetrics issues a single bounded query (all terminal runs, ordered)
- * and folds in memory — no per-job query loop. emitJobMetrics surfaces them via
+ * computeJobMetrics issues one query for all terminal runs (ordered) and one
+ * grouped count of overdue pending runs, and folds in memory — no per-job query
+ * loop. emitJobMetrics surfaces them via
  * an injectable structured-log sink and is loud (warn) for any job whose
  * consecutiveFailures crosses METRICS_CONSECUTIVE_FAILURE_ALERT_THRESHOLD, so
  * operators can act before the next run goes dead.
@@ -39,6 +44,7 @@ export interface JobMetric {
     lastDurationMs: number | null;
     schedulingLagMs: number | null;
     consecutiveFailures: number;
+    overduePendingRuns: number;
 }
 
 /** Structured log record emitted per job over the alert threshold. */
@@ -89,6 +95,15 @@ export async function computeJobMetrics(knex: Knex): Promise<JobMetric[]> {
             { column: "started_at", order: "desc" },
         ]);
 
+    // Only the reaper writes an error on a pending run (OVERDUE_PENDING_ERROR).
+    const overdueRows: { job_id: string; runs: number | string }[] = await knex("sys_job_run")
+        .where("status", "pending")
+        .whereNotNull("error")
+        .select("job_id")
+        .count("* as runs")
+        .groupBy("job_id");
+    const overdueByJob = new Map(overdueRows.map((row) => [row.job_id, Number(row.runs)]));
+
     // Bucket the ordered runs by job (single pass; runs are grouped by job_id).
     const runsByJob = new Map<string, TerminalRunRow[]>();
     for (const run of runs) {
@@ -103,6 +118,7 @@ export async function computeJobMetrics(knex: Knex): Promise<JobMetric[]> {
     return jobs.map((job) => {
         const jobRuns = runsByJob.get(job.id) ?? [];
         const enabled = job.enabled === true || job.enabled === 1;
+        const overduePendingRuns = overdueByJob.get(job.id) ?? 0;
 
         if (jobRuns.length === 0) {
             return {
@@ -113,6 +129,7 @@ export async function computeJobMetrics(knex: Knex): Promise<JobMetric[]> {
                 lastDurationMs: null,
                 schedulingLagMs: null,
                 consecutiveFailures: 0,
+                overduePendingRuns,
             };
         }
 
@@ -147,6 +164,7 @@ export async function computeJobMetrics(knex: Knex): Promise<JobMetric[]> {
             lastDurationMs,
             schedulingLagMs,
             consecutiveFailures,
+            overduePendingRuns,
         };
     });
 }
