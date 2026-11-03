@@ -10,8 +10,9 @@ export type {
     SubjectCondition,
     SubjectField,
     SubjectQuery,
+    SubjectRow,
     SubjectScope,
     SubjectSort,
 } from "./subjectQuery.js";
-export { escapeLike } from "./subjectQuery.js";
+export { compareSubjectRows, escapeLike, matchesSubjectRow } from "./subjectQuery.js";
 export * from "./TripleStore.js";

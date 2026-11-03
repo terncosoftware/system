@@ -11,12 +11,19 @@ import type {
     SubjectCondition,
     SubjectField,
     SubjectQuery,
+    SubjectRow,
     SubjectSort,
     TripleStore,
 } from "@terncosoftware/data";
-import { escapeLike } from "@terncosoftware/data";
-import type { EntityRecord, EntitySchema, FilterOp, IFieldCipher } from "@terncosoftware/entities";
-import { propIri, toLiteral } from "@terncosoftware/entities";
+import { compareSubjectRows, escapeLike, matchesSubjectRow } from "@terncosoftware/data";
+import type {
+    EncryptedLiteral,
+    EntityRecord,
+    EntitySchema,
+    FilterOp,
+    IFieldCipher,
+} from "@terncosoftware/entities";
+import { propIri, toLiteral, XSD_STRING } from "@terncosoftware/entities";
 import {
     type EdgeInput,
     type EntityInput,
@@ -69,7 +76,11 @@ const LIST_COMPARE_OPS: Readonly<Record<string, FilterOp>> = {
  * every tie, so the order is total and stable across pages.
  *
  * PII properties are encrypted at rest, so SQL cannot compare, sort or search
- * them. Naming one in any of those throws rather than reading every row.
+ * them. A query that filters, sorts or searches one narrows in SQL on its
+ * other filters, then decrypts what is left and filters, sorts and pages that
+ * in memory, by the same rules. Such a read costs the rows the other filters
+ * admit, not the rows on the page. A PII value compares as the string it was
+ * encrypted from.
  */
 export class EntityQuery<Props extends Record<string, unknown>> {
     private readonly _es: EntityStore;
@@ -78,16 +89,18 @@ export class EntityQuery<Props extends Record<string, unknown>> {
     private _limit?: number;
     private _offset?: number;
     private _acrossTenants = false;
+    /** IRIs of the PII predicates this query names: SQL sees only their ciphertext. */
+    private readonly _pii = new Set<string>();
 
     constructor(
         private readonly _store: TripleStore,
         private readonly _schema: EntitySchema<Props>,
-        cipher?: IFieldCipher,
+        private readonly _cipher?: IFieldCipher,
     ) {
         // The cipher (when supplied) flows to the inner EntityStore so that
         // hydrating PII-bearing records decrypts them, matching ctx.cipher
         // semantics for callers that wire the cipher at construction instead.
-        this._es = createEntityStore(_store, undefined, cipher);
+        this._es = createEntityStore(_store, undefined, _cipher);
     }
 
     /**
@@ -111,14 +124,24 @@ export class EntityQuery<Props extends Record<string, unknown>> {
         if (compare === undefined) {
             throw new Error(`EntityQuery.where: unknown operator "${String(op)}"`);
         }
-        this._where.push({ kind: "compare", field, op: compare, value: this._literal(value) });
+        this._where.push({
+            kind: "compare",
+            field,
+            op: compare,
+            value: this._literal(field, value),
+        });
         return this;
     }
 
     /** Keep entities whose `prop` equals any of `values`. An empty list keeps nothing; null matches no value. */
     whereIn(prop: keyof Props & string, values: readonly unknown[]): this {
-        const predicate = this._predicate(this._field(prop), prop, "whereIn");
-        this._where.push({ kind: "in", predicate, values: values.map((v) => this._literal(v)) });
+        const field = this._field(prop);
+        const predicate = this._predicate(field, prop, "whereIn");
+        this._where.push({
+            kind: "in",
+            predicate,
+            values: values.map((v) => this._literal(field, v)),
+        });
         return this;
     }
 
@@ -236,7 +259,9 @@ export class EntityQuery<Props extends Record<string, unknown>> {
     /** The page this query's limit and offset select, and how many entities its filters admit. */
     async page(ctx: ServerContext): Promise<EntityPage<Props>> {
         return this._store.withTransaction(ctx, async (txCtx) => {
-            const { subjects, total } = await this._store.selectSubjects(txCtx, this._query(txCtx));
+            const { subjects, total } = this._needsPlaintext()
+                ? await this._selectDecrypted(txCtx)
+                : await this._store.selectSubjects(txCtx, this._query(txCtx));
             const records = await this._hydrate(txCtx, subjects);
             return { records, total };
         });
@@ -253,8 +278,10 @@ export class EntityQuery<Props extends Record<string, unknown>> {
 
     /** How many entities the filters admit, whatever the limit and offset. */
     async count(ctx: ServerContext): Promise<number> {
-        return this._store.withTransaction(ctx, (txCtx) =>
-            this._store.countSubjects(txCtx, this._query(txCtx)),
+        return this._store.withTransaction(ctx, async (txCtx) =>
+            this._needsPlaintext()
+                ? (await this._selectDecrypted(txCtx)).total
+                : this._store.countSubjects(txCtx, this._query(txCtx)),
         );
     }
 
@@ -306,6 +333,99 @@ export class EntityQuery<Props extends Record<string, unknown>> {
         };
     }
 
+    /** True when a condition or the sort reads a PII value, which SQL sees only as ciphertext. */
+    private _needsPlaintext(): boolean {
+        return this._where.some((c) => this._readsPii(c)) || this._sortReadsPii();
+    }
+
+    private _readsPii(c: SubjectCondition): boolean {
+        switch (c.kind) {
+            case "compare":
+                return "predicate" in c.field && this._pii.has(c.field.predicate.value);
+            case "in":
+            case "like":
+                return this._pii.has(c.predicate.value);
+            case "search":
+                return c.predicates.some((p) => this._pii.has(p.value));
+            default:
+                return false;
+        }
+    }
+
+    private _sortReadsPii(): boolean {
+        return this._sort.some(
+            (s) => "predicate" in s.field && this._pii.has(s.field.predicate.value),
+        );
+    }
+
+    /**
+     * The page and total for a query that reads PII: SQL applies every
+     * condition it can, then the rest, the sort and the page run in memory
+     * over the decrypted values.
+     */
+    private async _selectDecrypted(
+        ctx: ServerContext,
+    ): Promise<{ subjects: IRI[]; total: number }> {
+        const cipher = ctx.cipher ?? this._cipher;
+        if (!cipher) {
+            throw new Error(
+                "EntityQuery: this query reads a PII property but no field cipher is available " +
+                    "on the context or query, so it cannot decrypt it.",
+            );
+        }
+        const inMemory = this._where.filter((c) => this._readsPii(c));
+        const predicates = new Map<string, IRI>();
+        const read = (p: IRI): void => {
+            predicates.set(p.value, p);
+        };
+        for (const c of inMemory) {
+            if (c.kind === "search") {
+                c.predicates.forEach(read);
+            } else if (c.kind === "compare") {
+                read((c.field as { predicate: IRI }).predicate);
+            } else if (c.kind === "in" || c.kind === "like") {
+                read(c.predicate);
+            }
+        }
+        for (const s of this._sort) {
+            if ("predicate" in s.field) {
+                read(s.field.predicate);
+            }
+        }
+        const query = { ...this._query(ctx), where: this._where.filter((c) => !this._readsPii(c)) };
+        const rows = (await this._store.subjectRows(ctx, query, [...predicates.values()]))
+            .map((row) => this._decryptRow(row, cipher))
+            .filter((row) => inMemory.every((c) => matchesSubjectRow(row, c)))
+            .sort((a, b) => compareSubjectRows(a, b, this._sort));
+        const start = this._offset ?? 0;
+        const end = this._limit === undefined ? undefined : start + this._limit;
+        return {
+            subjects: rows.slice(start, end).map((row) => ({ value: row.iri }) as IRI),
+            total: rows.length,
+        };
+    }
+
+    /** A row with each PII value replaced by the string it was encrypted from. */
+    private _decryptRow(row: SubjectRow, cipher: IFieldCipher): SubjectRow {
+        const values = new Map(row.values);
+        for (const [predicate, literals] of values) {
+            if (this._pii.has(predicate)) {
+                values.set(
+                    predicate,
+                    literals.map((lit) => ({
+                        termType: "Literal",
+                        value: cipher.decrypt(
+                            (lit as Partial<EncryptedLiteral>).keyId ?? cipher.currentKeyId,
+                            lit.value,
+                        ),
+                        datatype: XSD_STRING,
+                    })),
+                );
+            }
+        }
+        return { ...row, values };
+    }
+
     private async _hydrate(ctx: ServerContext, subjects: IRI[]): Promise<EntityRecord<Props>[]> {
         if (subjects.length === 0) {
             return [];
@@ -318,18 +438,17 @@ export class EntityQuery<Props extends Record<string, unknown>> {
         );
     }
 
-    /** A schema property or an entity timestamp. A PII property is refused: SQL sees only its ciphertext. */
+    /** A schema property or an entity timestamp. A PII property is noted, for _selectDecrypted. */
     private _field(prop: string): SubjectField {
         const def = (this._schema.properties as Record<string, unknown>)[prop] as
             | Parameters<typeof propIri>[0]
             | undefined;
         if (def !== undefined) {
+            const predicate = propIri(def);
             if (typeof def === "object" && "pii" in def && def.pii === true) {
-                throw new Error(
-                    `EntityQuery: "${prop}" is encrypted at rest, so it cannot be filtered, sorted or searched`,
-                );
+                this._pii.add(predicate.value);
             }
-            return { predicate: propIri(def) };
+            return { predicate };
         }
         if (prop === "createdAt" || prop === "updatedAt") {
             return { timestamp: prop };
@@ -344,8 +463,15 @@ export class EntityQuery<Props extends Record<string, unknown>> {
         throw new Error(`EntityQuery: ${use} cannot apply to the "${prop}" timestamp`);
     }
 
-    private _literal(value: unknown): Literal | null {
-        return value === null || value === undefined ? null : toLiteral(value);
+    /** A PII value is stored as the string form of what was written, so it compares as one. */
+    private _literal(field: SubjectField, value: unknown): Literal | null {
+        if (value === null || value === undefined) {
+            return null;
+        }
+        const literal = toLiteral(value);
+        return "predicate" in field && this._pii.has(field.predicate.value)
+            ? { ...literal, datatype: XSD_STRING }
+            : literal;
     }
 
     private _applyListFilter(filter: ListFilter): void {
