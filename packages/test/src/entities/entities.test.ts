@@ -413,12 +413,12 @@ for (const db of providers) {
             expect(scores.filter((s) => s === 10)).toHaveLength(2);
         });
 
-        it("orderBy: bv==null when one record has no value for the sort prop", async () => {
+        it("orderBy: a record with a value sorts before records without one, ascending", async () => {
             await es.create(ctx, schema, { name: "HasEmail", email: "z@test.com", score: 99 });
             const results = await ctx.entities(schema).orderBy("email", "asc").all(ctx);
             expect(results.length).toBeGreaterThanOrEqual(4);
             const emails = results.map((r) => r.props.email);
-            expect(emails[emails.length - 1]).toBe("z@test.com");
+            expect(emails[0]).toBe("z@test.com");
         });
     });
 
@@ -823,20 +823,18 @@ for (const db of providers) {
             expect(q.store).toBe(ctx.store);
         });
 
-        it("_applyEqFilter: unknown prop skips filtering (returns all)", async () => {
-            const results = await ctx
-                .entities(schema)
-                .where("nonexistentProp", "=", "anything")
-                .all(ctx);
-            expect(results.length).toBe(3);
+        it("a property the schema does not declare is refused", () => {
+            expect(() => ctx.entities(schema).where("nonexistentProp", "=", "anything")).toThrow(
+                /no property "nonexistentProp"/,
+            );
         });
 
-        it("_matchFilter default branch: unknown operator returns false", async () => {
-            const results = await ctx
-                .entities(schema)
-                .where("score", "BOGUS" as unknown as "=" | "!=" | "<" | "<=" | ">" | ">=", 10)
-                .all(ctx);
-            expect(results.length).toBe(0);
+        it("an unknown operator is refused", () => {
+            expect(() =>
+                ctx
+                    .entities(schema)
+                    .where("score", "BOGUS" as unknown as "=" | "!=" | "<" | "<=" | ">" | ">=", 10),
+            ).toThrow(/unknown operator "BOGUS"/);
         });
 
         it("_matchFilter: non-eq filter on undefined prop compares against undefined", async () => {
@@ -850,8 +848,7 @@ for (const db of providers) {
         });
     });
 
-    // Dedicated sort-branch test with a fresh describe to control insertion order
-    describe(`EntityQuery — orderBy bv==null branch (${db.name})`, () => {
+    describe(`EntityQuery — missing sort values (${db.name})`, () => {
         let ctx: Awaited<ReturnType<typeof setup>>;
         let es: EntityStore;
         let schema: EntitySchema;
@@ -867,11 +864,11 @@ for (const db of providers) {
             await teardown(ctx);
         });
 
-        it("bv==null: element-with-value appears before element-without → cmp=1 branch", async () => {
-            const results = await ctx.entities(schema).orderBy("email", "asc").all(ctx);
-            expect(results).toHaveLength(2);
-            expect(results[0]?.props.name).toBe("NoEmail");
-            expect(results[1]?.props.name).toBe("HasEmail");
+        it("a missing value sorts last ascending and first descending", async () => {
+            const asc = await ctx.entities(schema).orderBy("email", "asc").all(ctx);
+            expect(asc.map((r) => r.props.name)).toEqual(["HasEmail", "NoEmail"]);
+            const desc = await ctx.entities(schema).orderBy("email", "desc").all(ctx);
+            expect(desc.map((r) => r.props.name)).toEqual(["NoEmail", "HasEmail"]);
         });
     });
 }

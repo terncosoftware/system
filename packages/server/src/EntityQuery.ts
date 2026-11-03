@@ -1,7 +1,22 @@
-import type { IRI, Quad } from "@terncosoftware/core";
-import type { QuadTerms, TripleStore } from "@terncosoftware/data";
+import type { IRI, Literal } from "@terncosoftware/core";
+import type {
+    ListFilter,
+    ListQuery,
+    ListRow,
+    ListSchema,
+    ListWindow,
+} from "@terncosoftware/core/list";
+import type {
+    SubjectCompareOp,
+    SubjectCondition,
+    SubjectField,
+    SubjectQuery,
+    SubjectSort,
+    TripleStore,
+} from "@terncosoftware/data";
+import { escapeLike } from "@terncosoftware/data";
 import type { EntityRecord, EntitySchema, FilterOp, IFieldCipher } from "@terncosoftware/entities";
-import { RDF_TYPE, toLiteral } from "@terncosoftware/entities";
+import { propIri, toLiteral } from "@terncosoftware/entities";
 import {
     type EdgeInput,
     type EntityInput,
@@ -14,42 +29,52 @@ import { tenantGraph } from "./tenancy.js";
 
 export type { FilterOp };
 
-interface Filter {
-    prop: string;
-    op: FilterOp;
-    value: unknown;
+/** The timestamps every entity carries, derived from its edges. Sortable and comparable like a property. */
+export type EntityTimestampField = "createdAt" | "updatedAt";
+
+/** A field a query can sort and filter on: a schema property or an entity timestamp. */
+export type EntityQueryField<Props> = (keyof Props & string) | EntityTimestampField;
+
+/** One page of a query and how many entities its filters admit. */
+export interface EntityPage<Props extends Record<string, unknown>> {
+    readonly records: EntityRecord<Props>[];
+    readonly total: number;
 }
 
-/** An edge-equality filter: entity --edge--> targetIri. */
-interface EdgeFilter {
-    edgeName: string;
-    targetIri: string;
-}
+const COMPARE_OPS: Readonly<Record<string, SubjectCompareOp>> = {
+    "=": "eq",
+    "!=": "neq",
+    "<": "lt",
+    "<=": "lte",
+    ">": "gt",
+    ">=": "gte",
+};
 
-/** An edge-membership filter: entity --edge--> any of targetIris. */
-interface EdgeAnyFilter {
-    edgeName: string;
-    targetIris: string[];
-}
+const LIST_COMPARE_OPS: Readonly<Record<string, FilterOp>> = {
+    eq: "=",
+    neq: "!=",
+    lt: "<",
+    lte: "<=",
+    gt: ">",
+    gte: ">=",
+};
 
-/** A subtree-membership filter: entity is reachable from rootIri via the edge's predicate. */
-interface WithinFilter {
-    edgeName: string;
-    rootIri: string;
-}
-
-interface OrderClause {
-    prop: string;
-    dir: "asc" | "desc";
-}
-
+/**
+ * Reads entities of one schema. Every filter, sort, search and page runs in
+ * SQL, so a page costs the rows on it, not the rows of the type.
+ *
+ * Values order as `compareListValues` in `@terncosoftware/core/list` orders
+ * them: a missing value sorts after every present one ascending, strings
+ * compare case-insensitively and then exactly, and the entity IRI breaks
+ * every tie, so the order is total and stable across pages.
+ *
+ * PII properties are encrypted at rest, so SQL cannot compare, sort or search
+ * them. Naming one in any of those throws rather than reading every row.
+ */
 export class EntityQuery<Props extends Record<string, unknown>> {
     private readonly _es: EntityStore;
-    private _filters: Filter[] = [];
-    private _edgeFilters: EdgeFilter[] = [];
-    private _edgeAnyFilters: EdgeAnyFilter[] = [];
-    private _withinFilters: WithinFilter[] = [];
-    private _order?: OrderClause;
+    private _where: SubjectCondition[] = [];
+    private _sort: SubjectSort[] = [];
     private _limit?: number;
     private _offset?: number;
     private _acrossTenants = false;
@@ -65,61 +90,93 @@ export class EntityQuery<Props extends Record<string, unknown>> {
         this._es = createEntityStore(_store, undefined, cipher);
     }
 
-    where(prop: keyof Props & string, op: FilterOp, value: unknown): this {
-        this._filters.push({ prop, op, value });
+    /**
+     * Keep entities whose `prop` compares to `value`. A null value with `=`
+     * keeps entities with no value, with `!=` those with any. `!=` keeps an
+     * entity with no value. LIKE and ILIKE take a SQL pattern on the lexical
+     * value, with backslash escaping `%` and `_`.
+     */
+    where(prop: EntityQueryField<Props>, op: FilterOp, value: unknown): this {
+        const field = this._field(prop);
+        if (op === "LIKE" || op === "ILIKE") {
+            this._where.push({
+                kind: "like",
+                predicate: this._predicate(field, prop, op),
+                pattern: String(value),
+                caseInsensitive: op === "ILIKE",
+            });
+            return this;
+        }
+        const compare = COMPARE_OPS[op];
+        if (compare === undefined) {
+            throw new Error(`EntityQuery.where: unknown operator "${String(op)}"`);
+        }
+        this._where.push({ kind: "compare", field, op: compare, value: this._literal(value) });
+        return this;
+    }
+
+    /** Keep entities whose `prop` equals any of `values`. An empty list keeps nothing; null matches no value. */
+    whereIn(prop: keyof Props & string, values: readonly unknown[]): this {
+        const predicate = this._predicate(this._field(prop), prop, "whereIn");
+        this._where.push({ kind: "in", predicate, values: values.map((v) => this._literal(v)) });
         return this;
     }
 
     /**
-     * Read across EVERY tenant graph instead of the caller's own — the
+     * Keep entities where every whitespace-separated term of `text` appears,
+     * case-insensitively, in one of `props`. Blank text keeps everything.
+     */
+    search(text: string, props: readonly (keyof Props & string)[]): this {
+        const terms = text.split(/\s+/).filter(Boolean);
+        if (terms.length === 0) {
+            return this;
+        }
+        const predicates = props.map((p) => this._predicate(this._field(p), p, "search"));
+        this._where.push({ kind: "search", predicates, terms });
+        return this;
+    }
+
+    /**
+     * Read across EVERY tenant graph instead of the caller's own: the
      * sanctioned escape hatch for system surfaces (superuser dashboards,
      * install-wide metrics) whose whole point is a cross-tenant view.  The
      * caller is responsible for gating access (e.g. behind a superuser guard);
-     * request paths must never use this — they stay scoped to ctx.tenantId
-     * (TRN-531).  Scans and hydration omit the graph filter entirely.
+     * request paths must never use this; they stay scoped to ctx.tenantId.
      */
     acrossTenants(): this {
         this._acrossTenants = true;
         return this;
     }
 
-    orderBy(prop: keyof Props & string, dir: "asc" | "desc" = "asc"): this {
-        this._order = { prop, dir };
+    /** Add a sort key. Keys apply in the order they are added; the entity IRI breaks remaining ties. */
+    orderBy(prop: EntityQueryField<Props>, dir: "asc" | "desc" = "asc"): this {
+        this._sort.push({ field: this._field(prop), direction: dir });
         return this;
     }
 
     /**
      * Filter to entities whose `edge` points at `target` (an id, IRI, or record).
-     * This is the topological replacement for `.where('fooId', '=', …)` — it
+     * This is the topological replacement for `.where('fooId', '=', …)`: it
      * matches on the IRI-object edge, not a foreign-key scalar.
      */
     connectedTo(edge: string, target: EdgeInput): this {
-        const def = this._schema.edges?.[edge];
-        if (!def) {
-            throw new Error(`EntityQuery.connectedTo: schema has no edge "${edge}"`);
-        }
-        this._edgeFilters.push({
-            edgeName: edge,
-            targetIri: edgeTargetIri(target, def.target?.()),
-        });
-        return this;
+        return this.connectedToAny(edge, [target]);
     }
 
     /**
-     * Filter to entities whose `edge` points at ANY of `targets` — the reverse
+     * Filter to entities whose `edge` points at ANY of `targets`, the reverse
      * batched form of connectedTo (e.g. grants whose hasPrincipal is in a
-     * principal set).  Evaluated in one query, not a per-target loop.
+     * principal set). An empty set matches nothing.
      */
     connectedToAny(edge: string, targets: EdgeInput[]): this {
         const def = this._schema.edges?.[edge];
         if (!def) {
-            throw new Error(`EntityQuery.connectedToAny: schema has no edge "${edge}"`);
+            throw new Error(`EntityQuery: schema has no edge "${edge}"`);
         }
-        // Always record the filter, even when empty: "connected to any of nothing"
-        // matches nothing (rather than degrading to no filter / match-all).
-        this._edgeAnyFilters.push({
-            edgeName: edge,
-            targetIris: targets.map((t) => edgeTargetIri(t, def.target?.())),
+        this._where.push({
+            kind: "edge",
+            predicate: def.predicate,
+            targets: targets.map((t) => ({ value: edgeTargetIri(t, def.target?.()) }) as IRI),
         });
         return this;
     }
@@ -132,9 +189,13 @@ export class EntityQuery<Props extends Record<string, unknown>> {
     within(edge: string, root: EdgeInput): this {
         const def = this._schema.edges?.[edge];
         if (!def) {
-            throw new Error(`EntityQuery.within: schema has no edge "${edge}"`);
+            throw new Error(`EntityQuery: schema has no edge "${edge}"`);
         }
-        this._withinFilters.push({ edgeName: edge, rootIri: edgeTargetIri(root, def.target?.()) });
+        this._where.push({
+            kind: "within",
+            predicate: def.predicate,
+            root: { value: edgeTargetIri(root, def.target?.()) } as IRI,
+        });
         return this;
     }
 
@@ -148,37 +209,41 @@ export class EntityQuery<Props extends Record<string, unknown>> {
         return this;
     }
 
-    async all(ctx: ServerContext): Promise<EntityRecord<Props>[]> {
+    /**
+     * Narrow this query to one list window: the query's sort, filters, search
+     * and page. List field names are schema property names or an entity
+     * timestamp, and the list's key must be the record id, since the entity
+     * IRI is the tiebreak. `toRow` turns each record on the page into its row.
+     */
+    async window<Row extends ListRow>(
+        ctx: ServerContext,
+        query: ListQuery,
+        schema: ListSchema,
+        toRow: (record: EntityRecord<Props>) => Row,
+    ): Promise<ListWindow<Row>> {
+        for (const sort of query.sort) {
+            this.orderBy(sort.field as EntityQueryField<Props>, sort.direction);
+        }
+        for (const filter of query.filters) {
+            this._applyListFilter(filter);
+        }
+        this.search(query.search, schema.searchFields as (keyof Props & string)[]);
+        const { offset, limit } = query.page;
+        const page = await this.offset(offset).limit(limit).page(ctx);
+        return { rows: page.records.map(toRow), total: page.total, offset, limit };
+    }
+
+    /** The page this query's limit and offset select, and how many entities its filters admit. */
+    async page(ctx: ServerContext): Promise<EntityPage<Props>> {
         return this._store.withTransaction(ctx, async (txCtx) => {
-            const candidateIris = await this._narrow(txCtx);
-
-            const otherFilters = this._filters.filter((f) => f.op !== "=");
-
-            let records = await this._es.hydrateMany(txCtx, this._schema, candidateIris, {
-                acrossTenants: this._acrossTenants,
-            });
-
-            for (const f of otherFilters) {
-                records = records.filter((r) => this._matchFilter(r, f));
-            }
-
-            if (this._order) {
-                const { prop, dir } = this._order;
-                records.sort((a, b) => {
-                    const av = a.props[prop];
-                    const bv = b.props[prop];
-                    if (av === bv) {
-                        return 0;
-                    }
-                    const cmp = av == null ? -1 : bv == null ? 1 : av < bv ? -1 : 1;
-                    return dir === "asc" ? cmp : -cmp;
-                });
-            }
-
-            const start = this._offset ?? 0;
-            const end = this._limit !== undefined ? start + this._limit : undefined;
-            return records.slice(start, end);
+            const { subjects, total } = await this._store.selectSubjects(txCtx, this._query(txCtx));
+            const records = await this._hydrate(txCtx, subjects);
+            return { records, total };
         });
+    }
+
+    async all(ctx: ServerContext): Promise<EntityRecord<Props>[]> {
+        return (await this.page(ctx)).records;
     }
 
     async first(ctx: ServerContext): Promise<EntityRecord<Props> | null> {
@@ -186,11 +251,11 @@ export class EntityQuery<Props extends Record<string, unknown>> {
         return results[0] ?? null;
     }
 
+    /** How many entities the filters admit, whatever the limit and offset. */
     async count(ctx: ServerContext): Promise<number> {
-        return this._store.withTransaction(ctx, async (txCtx) => {
-            const iris = await this._narrow(txCtx);
-            return iris.length;
-        });
+        return this._store.withTransaction(ctx, (txCtx) =>
+            this._store.countSubjects(txCtx, this._query(txCtx)),
+        );
     }
 
     async create(ctx: ServerContext, data: EntityInput<Props>): Promise<EntityRecord<Props>> {
@@ -223,166 +288,84 @@ export class EntityQuery<Props extends Record<string, unknown>> {
     // ── Private ───────────────────────────────────────────────────────────────
 
     /**
-     * Narrows the entity set by every server-side filter (equality, edge, and
-     * subtree) and returns the surviving IRIs.  Shared by all() and count().
+     * The scope a query reads in: a schema's fixed graphIri wins, otherwise the
+     * caller's tenant graph (null is the default graph). It mirrors
+     * EntityStore._filterGraph so a query and its store agree on scope;
+     * acrossTenants() reads every graph.
      */
-    private async _narrow(ctx: ServerContext): Promise<string[]> {
-        let iris = await this._allEntityIris(ctx);
-        for (const f of this._filters.filter((ff) => ff.op === "=")) {
-            iris = await this._applyEqFilter(ctx, iris, f);
-        }
-        for (const ef of this._edgeFilters) {
-            iris = await this._applyEdgeFilter(ctx, iris, ef);
-        }
-        for (const ef of this._edgeAnyFilters) {
-            iris = await this._applyEdgeAnyFilter(ctx, iris, ef);
-        }
-        for (const wf of this._withinFilters) {
-            iris = await this._applyWithinFilter(ctx, iris, wf);
-        }
-        return iris;
+    private _query(ctx: ServerContext): SubjectQuery {
+        return {
+            type: this._schema.typeIRI,
+            scope: this._acrossTenants
+                ? { acrossTenants: true }
+                : { graph: this._schema.graphIri ?? tenantGraph(ctx, this._schema.graph) },
+            where: this._where,
+            sort: this._sort,
+            offset: this._offset,
+            limit: this._limit,
+        };
     }
 
-    /**
-     * The graph a scoped flat type scan runs in: a schema's fixed graphIri
-     * wins, otherwise the caller's tenant graph (null ⇒ DEFAULT_GRAPH).
-     * Mirrors EntityStore._filterGraph so a query and its store agree on scope;
-     * without it a scan reads across every tenant and leaks foreign rows
-     * (TRN-531).
-     */
-    private _scanGraph(ctx: ServerContext): IRI | null {
-        return this._schema.graphIri ?? tenantGraph(ctx, this._schema.graph);
-    }
-
-    /**
-     * Runs one flat type scan in this query's scope.  acrossTenants() is the
-     * sanctioned cross-tenant view (TRN-531), so it reads every tenant's graph;
-     * every other query is scoped.  The single place this query decides, so no
-     * individual scan can get it wrong.
-     */
-    private async _scan(ctx: ServerContext, terms: QuadTerms): Promise<Quad[]> {
-        if (this._acrossTenants) {
-            return this._store.findAcrossTenants(ctx, terms);
-        }
-        return this._store.find(ctx, { ...terms, graph: this._scanGraph(ctx) });
-    }
-
-    private async _allEntityIris(ctx: ServerContext): Promise<string[]> {
-        const quads = await this._scan(ctx, {
-            predicate: RDF_TYPE,
-            object: this._schema.typeIRI,
-        });
-        return quads.map((q) => (q.subject as IRI).value);
-    }
-
-    /** Narrows to entities that have an out-edge pointing at the target IRI. */
-    private async _applyEdgeFilter(
-        ctx: ServerContext,
-        iris: string[],
-        f: EdgeFilter,
-    ): Promise<string[]> {
-        const def = this._schema.edges?.[f.edgeName];
-        /* v8 ignore next 3 -- guarded at connectedTo() call time */
-        if (!def) {
-            return iris;
-        }
-        const edgeQuads = await this._scan(ctx, {
-            predicate: def.predicate,
-            object: { value: f.targetIri } as IRI,
-        });
-        const matching = new Set(edgeQuads.map((q) => (q.subject as IRI).value));
-        return iris.filter((iri) => matching.has(iri));
-    }
-
-    /** Narrows to entities whose edge points at any IRI in the target set (one query). */
-    private async _applyEdgeAnyFilter(
-        ctx: ServerContext,
-        iris: string[],
-        f: EdgeAnyFilter,
-    ): Promise<string[]> {
-        const def = this._schema.edges?.[f.edgeName];
-        /* v8 ignore next 3 -- guarded at connectedToAny() call time */
-        if (!def) {
-            return iris;
-        }
-        // Empty target set ⇒ nothing qualifies; skip the query entirely.
-        if (f.targetIris.length === 0) {
+    private async _hydrate(ctx: ServerContext, subjects: IRI[]): Promise<EntityRecord<Props>[]> {
+        if (subjects.length === 0) {
             return [];
         }
-        const targetSet = new Set(f.targetIris);
-        const edgeQuads = await this._scan(ctx, {
-            predicate: def.predicate,
-        });
-        const matching = new Set(
-            edgeQuads
-                .filter((q) => targetSet.has((q.object as IRI).value))
-                .map((q) => (q.subject as IRI).value),
+        return this._es.hydrateMany(
+            ctx,
+            this._schema,
+            subjects.map((s) => s.value),
+            { acrossTenants: this._acrossTenants },
         );
-        return iris.filter((iri) => matching.has(iri));
     }
 
-    /** Narrows to entities within the subtree rooted at rootIri (one recursive CTE). */
-    private async _applyWithinFilter(
-        ctx: ServerContext,
-        iris: string[],
-        f: WithinFilter,
-    ): Promise<string[]> {
-        const def = this._schema.edges?.[f.edgeName];
-        /* v8 ignore next 3 -- guarded at within() call time */
-        if (!def) {
-            return iris;
-        }
-        // Descendants of the root: follow the edge predicate inbound (child --edge--> parent).
-        const subtree = await this._store.reachable(ctx, {
-            roots: [{ value: f.rootIri } as IRI],
-            predicates: [def.predicate],
-            direction: "in",
-            // reachable() still takes an optional graph, where omitting it
-            // walks every graph; findAcrossTenants() is the QuadPattern
-            // equivalent for the scans above.
-            graph: this._acrossTenants ? undefined : this._scanGraph(ctx),
-        });
-        const subtreeSet = new Set(subtree.map((i) => i.value));
-        return iris.filter((iri) => subtreeSet.has(iri));
-    }
-
-    private async _applyEqFilter(ctx: ServerContext, iris: string[], f: Filter): Promise<string[]> {
-        const propIri = (this._schema.properties as Record<string, IRI>)[f.prop];
-        if (!propIri) {
-            return iris;
-        }
-
-        const valueNode = toLiteral(f.value);
-        const propQuads = await this._scan(ctx, {
-            predicate: propIri,
-            object: valueNode,
-        });
-        const matchingEntities = new Set(propQuads.map((q) => (q.subject as IRI).value));
-
-        return iris.filter((iri) => matchingEntities.has(iri));
-    }
-
-    private _matchFilter(record: EntityRecord<Props>, f: Filter): boolean {
-        const value = record.props[f.prop];
-        switch (f.op) {
-            case "!=":
-                return value !== f.value;
-            case "<":
-                return (value as number) < (f.value as number);
-            case "<=":
-                return (value as number) <= (f.value as number);
-            case ">":
-                return (value as number) > (f.value as number);
-            case ">=":
-                return (value as number) >= (f.value as number);
-            case "LIKE":
-            case "ILIKE": {
-                const pat = String(f.value).replace(/%/g, ".*").replace(/_/g, ".");
-                const flags = f.op === "ILIKE" ? "i" : "";
-                return typeof value === "string" && new RegExp(`^${pat}$`, flags).test(value);
+    /** A schema property or an entity timestamp. A PII property is refused: SQL sees only its ciphertext. */
+    private _field(prop: string): SubjectField {
+        const def = (this._schema.properties as Record<string, unknown>)[prop] as
+            | Parameters<typeof propIri>[0]
+            | undefined;
+        if (def !== undefined) {
+            if (typeof def === "object" && "pii" in def && def.pii === true) {
+                throw new Error(
+                    `EntityQuery: "${prop}" is encrypted at rest, so it cannot be filtered, sorted or searched`,
+                );
             }
-            default:
-                return false;
+            return { predicate: propIri(def) };
         }
+        if (prop === "createdAt" || prop === "updatedAt") {
+            return { timestamp: prop };
+        }
+        throw new Error(`EntityQuery: schema has no property "${prop}"`);
+    }
+
+    private _predicate(field: SubjectField, prop: string, use: string): IRI {
+        if ("predicate" in field) {
+            return field.predicate;
+        }
+        throw new Error(`EntityQuery: ${use} cannot apply to the "${prop}" timestamp`);
+    }
+
+    private _literal(value: unknown): Literal | null {
+        return value === null || value === undefined ? null : toLiteral(value);
+    }
+
+    private _applyListFilter(filter: ListFilter): void {
+        const prop = filter.field as keyof Props & string;
+        const { value } = filter;
+        if (filter.op === "in") {
+            this.whereIn(prop, Array.isArray(value) ? value : [value]);
+            return;
+        }
+        if (filter.op === "contains") {
+            this.where(prop, "ILIKE", `%${escapeLike(String(value ?? ""))}%`);
+            return;
+        }
+        if (Array.isArray(value)) {
+            throw new Error(`EntityQuery: the "${filter.op}" filter takes one value, not a list`);
+        }
+        const op = LIST_COMPARE_OPS[filter.op];
+        if (op === undefined) {
+            throw new Error(`EntityQuery: unknown list filter "${filter.op}"`);
+        }
+        this.where(prop as EntityQueryField<Props>, op, value);
     }
 }
