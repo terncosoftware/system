@@ -216,9 +216,20 @@ export function subjectQueryIris(q: SubjectQuery, rdfType: IRI): IRI[] {
     return iris;
 }
 
+export interface CompiledStatement {
+    readonly sql: string;
+    readonly bindings: readonly (string | number)[];
+}
+
 export interface CompiledSubjectQuery {
-    readonly page: { readonly sql: string; readonly bindings: readonly (string | number)[] };
-    readonly count: { readonly sql: string; readonly bindings: readonly (string | number)[] };
+    readonly page: CompiledStatement;
+    readonly count: CompiledStatement;
+    /**
+     * Every subject the filters admit, unsorted and unpaged: `subjects` gives
+     * each one's IRI and timestamps, `values` the live literal values of
+     * `predicates` on them, newest first.
+     */
+    rows(predicates: readonly IRI[]): { subjects: CompiledStatement; values: CompiledStatement };
 }
 
 /** No node has this id, so a clause naming an IRI the store never saw matches nothing. */
@@ -429,8 +440,179 @@ export function compileSubjectQuery(
         `${joins.join(" ")}${whereSql} ORDER BY ${order.join(", ")} ${page.sql}`;
     const countSql = `${withSql}SELECT COUNT(*) AS total FROM ${candidates}${whereSql}`;
 
+    const from = `${withSql}SELECT s.${C.iri} AS iri`;
+    const subjectsSql =
+        `${from}, ${timestampOf("createdAt")} AS ${C.createdAt}, ${timestampOf("updatedAt")} AS ${C.updatedAt} ` +
+        `FROM ${candidates} JOIN ${T.nodes} s ON s.${C.id} = c.sid${whereSql}`;
+
     return {
         page: { sql: pageSql.trim(), bindings: [...bindings, ...page.bindings] },
         count: { sql: countSql, bindings },
+        rows: (predicates) => {
+            const pids = predicates.map(id);
+            const valuesSql =
+                `${from}, vp.${C.iri} AS predicate, vn.${C.value} AS value, vn.${C.dt} AS dt, vn.${C.keyId} AS key_id ` +
+                `FROM ${candidates} JOIN ${T.nodes} s ON s.${C.id} = c.sid ` +
+                `JOIN ${T.edges} ve ON ve.${C.subject} = c.sid AND ve.${C.predicate} IN (${pids.length > 0 ? pids.join(", ") : MISSING}) AND ${live("ve")} ` +
+                `JOIN ${T.nodes} vp ON vp.${C.id} = ve.${C.predicate} ` +
+                `JOIN ${T.nodes} vn ON vn.${C.id} = ve.${C.object} AND vn.${C.kind} = 'literal'${whereSql} ` +
+                `ORDER BY ve.${C.id} DESC`;
+            return {
+                subjects: { sql: subjectsSql, bindings },
+                values: { sql: valuesSql, bindings },
+            };
+        },
     };
+}
+
+// ── Conditions and sorts on values held in memory ────────────────────────────
+
+/** A subject's values as SQL sees them, for conditions it cannot evaluate itself. */
+export interface SubjectRow {
+    readonly iri: string;
+    /** ISO-8601. */
+    readonly createdAt: string;
+    /** ISO-8601. */
+    readonly updatedAt: string;
+    /** Live literal values by predicate IRI, newest first. */
+    readonly values: ReadonlyMap<string, readonly Literal[]>;
+}
+
+const lexCompare = (a: string, b: string): number => (a === b ? 0 : a < b ? -1 : 1);
+const foldCompare = (a: string, b: string): number =>
+    lexCompare(a.toLowerCase(), b.toLowerCase()) || lexCompare(a, b);
+
+/** One present value against another, as the SQL ORDER BY ranks them. */
+function compareLiterals(a: Literal, b: Literal): number {
+    const ra = rankOf(a.datatype?.value);
+    const rb = rankOf(b.datatype?.value);
+    if (ra !== rb) {
+        return ra - rb;
+    }
+    if (ra === 1) {
+        const order = Number(a.value) - Number(b.value);
+        if (order !== 0) {
+            return order;
+        }
+    }
+    return foldCompare(a.value, b.value);
+}
+
+function literalEquals(n: Literal, lit: Literal): boolean {
+    const r = rankOf(lit.datatype?.value);
+    if (r === 1) {
+        return rankOf(n.datatype?.value) === 1 && Number(n.value) === Number(lit.value);
+    }
+    return rankOf(n.datatype?.value) === r && n.value === lit.value;
+}
+
+function literalInRange(n: Literal, op: "lt" | "lte" | "gt" | "gte", lit: Literal): boolean {
+    const rn = rankOf(n.datatype?.value);
+    const r = rankOf(lit.datatype?.value);
+    const below = op === "lt" || op === "lte";
+    if (rn !== r) {
+        return below ? rn < r : rn > r;
+    }
+    const order =
+        r === 1
+            ? Number(n.value) - Number(lit.value)
+            : r === 0
+              ? lexCompare(n.value, lit.value)
+              : foldCompare(n.value, lit.value);
+    return { lt: order < 0, lte: order <= 0, gt: order > 0, gte: order >= 0 }[op];
+}
+
+/** A LIKE pattern (backslash escapes) as an anchored regular expression. */
+function likeToRegExp(pattern: string, caseInsensitive: boolean): RegExp {
+    let source = "";
+    for (let i = 0; i < pattern.length; i++) {
+        let ch = pattern[i] as string;
+        if (ch === "\\" && i + 1 < pattern.length) {
+            i++;
+            ch = pattern[i] as string;
+        } else if (ch === "%") {
+            source += ".*";
+            continue;
+        } else if (ch === "_") {
+            source += ".";
+            continue;
+        }
+        source += ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+    return new RegExp(`^${source}$`, caseInsensitive ? "si" : "s");
+}
+
+/**
+ * True when the row passes the condition, by the rules the SQL applies.
+ * Edge, subtree and timestamp conditions read the graph, so only SQL runs them.
+ */
+export function matchesSubjectRow(row: SubjectRow, c: SubjectCondition): boolean {
+    const valuesOf = (predicate: IRI): readonly Literal[] => row.values.get(predicate.value) ?? [];
+    switch (c.kind) {
+        case "compare": {
+            if ("timestamp" in c.field) {
+                throw new Error("matchesSubjectRow: timestamp conditions run in SQL only");
+            }
+            const values = valuesOf(c.field.predicate);
+            const { value } = c;
+            if (value === null) {
+                return c.op === "eq" ? values.length === 0 : c.op === "neq" && values.length > 0;
+            }
+            if (c.op === "eq") {
+                return values.some((n) => literalEquals(n, value));
+            }
+            if (c.op === "neq") {
+                return !values.some((n) => literalEquals(n, value));
+            }
+            const op = c.op;
+            return values.some((n) => literalInRange(n, op, value));
+        }
+        case "in": {
+            const values = valuesOf(c.predicate);
+            return c.values.some((lit) =>
+                lit === null ? values.length === 0 : values.some((n) => literalEquals(n, lit)),
+            );
+        }
+        case "like": {
+            const re = likeToRegExp(c.pattern, c.caseInsensitive);
+            return valuesOf(c.predicate).some((n) => re.test(n.value));
+        }
+        case "search": {
+            const haystack = c.predicates.flatMap((p) =>
+                valuesOf(p).map((n) => n.value.toLowerCase()),
+            );
+            return c.terms
+                .filter((t) => t.length > 0)
+                .every((term) => haystack.some((v) => v.includes(term.toLowerCase())));
+        }
+        case "edge":
+        case "within":
+            throw new Error(`matchesSubjectRow: ${c.kind} conditions run in SQL only`);
+    }
+}
+
+/** Order two rows by the sort keys, then by IRI, exactly as the compiled ORDER BY does. */
+export function compareSubjectRows(
+    a: SubjectRow,
+    b: SubjectRow,
+    sort: readonly SubjectSort[],
+): number {
+    for (const s of sort) {
+        let order: number;
+        if ("timestamp" in s.field) {
+            order = lexCompare(a[s.field.timestamp], b[s.field.timestamp]);
+        } else {
+            const va = a.values.get(s.field.predicate.value)?.[0];
+            const vb = b.values.get(s.field.predicate.value)?.[0];
+            // A missing value sorts after every present one ascending.
+            order =
+                va === undefined || vb === undefined
+                    ? Number(va === undefined) - Number(vb === undefined)
+                    : compareLiterals(va, vb);
+        }
+        if (order !== 0) {
+            return s.direction === "desc" ? -order : order;
+        }
+    }
+    return foldCompare(a.iri, b.iri);
 }

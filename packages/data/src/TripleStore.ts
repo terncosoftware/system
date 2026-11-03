@@ -15,6 +15,7 @@ import {
     PG_DIALECT,
     SQLITE_DIALECT,
     type SubjectQuery,
+    type SubjectRow,
     subjectQueryIris,
 } from "./subjectQuery.js";
 
@@ -1046,10 +1047,71 @@ export class TripleStore {
         });
     }
 
+    /**
+     * Every subject the query's filters admit, unsorted and unpaged, with its
+     * timestamps and the live values of `predicates`, newest first. For a
+     * caller that must filter or sort on values SQL cannot read, such as
+     * ciphertext it decrypts. An encrypted value comes back as the
+     * ciphertext literal tagged `encrypted` with its key id.
+     */
+    async subjectRows(
+        ctx: ServerContext,
+        query: SubjectQuery,
+        predicates: readonly IRI[],
+    ): Promise<SubjectRow[]> {
+        return this.withTransaction(ctx, async (ctx) => {
+            const compiled = await this._compileSubjectQuery(ctx, query, predicates);
+            if (compiled === null) {
+                return [];
+            }
+            const { subjects, values } = compiled.rows(predicates);
+            const subjectRows = this._rows<{
+                iri: string;
+                created_at: string | Date;
+                updated_at: string | Date;
+            }>(await this._db(ctx).raw(subjects.sql, [...subjects.bindings]));
+            const valueRows =
+                predicates.length === 0
+                    ? []
+                    : this._rows<{
+                          iri: string;
+                          predicate: string;
+                          value: string;
+                          dt: string | null;
+                          key_id: string | null;
+                      }>(await this._db(ctx).raw(values.sql, [...values.bindings]));
+
+            const bySubject = new Map<string, Map<string, Literal[]>>();
+            for (const row of valueRows) {
+                const values = bySubject.get(row.iri) ?? new Map<string, Literal[]>();
+                bySubject.set(row.iri, values);
+                const literal: Literal = {
+                    termType: "Literal",
+                    value: row.value,
+                    datatype: makeIRI(row.dt ?? "http://www.w3.org/2001/XMLSchema#string"),
+                };
+                const tagged =
+                    row.key_id === null
+                        ? literal
+                        : ({ ...literal, encrypted: true, keyId: row.key_id } as EncryptedLiteral);
+                values.set(row.predicate, [...(values.get(row.predicate) ?? []), tagged]);
+            }
+            // Postgres returns timestamptz as a Date, SQLite as the ISO text the triggers stamp.
+            const iso = (t: string | Date): string => (typeof t === "string" ? t : t.toISOString());
+            return subjectRows.map((row) => ({
+                iri: row.iri,
+                createdAt: iso(row.created_at),
+                updatedAt: iso(row.updated_at),
+                values: bySubject.get(row.iri) ?? new Map(),
+            }));
+        });
+    }
+
     /** Null when the query's graph was never written, so no subject can match. */
     private async _compileSubjectQuery(
         ctx: ServerContext,
         query: SubjectQuery,
+        predicates: readonly IRI[] = [],
     ): Promise<CompiledSubjectQuery | null> {
         let graphId: number | null = null;
         if ("graph" in query.scope) {
@@ -1059,7 +1121,7 @@ export class TripleStore {
             }
         }
         const rdfType = makeIRI(RDF_TYPE);
-        const ids = await this._nodeIds(ctx, subjectQueryIris(query, rdfType));
+        const ids = await this._nodeIds(ctx, [...subjectQueryIris(query, rdfType), ...predicates]);
         const dialect = this._isPg() ? PG_DIALECT : SQLITE_DIALECT;
         return compileSubjectQuery(query, rdfType, ids, graphId, dialect);
     }

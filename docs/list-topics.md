@@ -34,7 +34,10 @@ match, so a page costs the rows on it. List fields are the schema's property
 names, plus `createdAt` and `updatedAt`, and the list key is the record id.
 The store orders values as `compareListValues` does, so a page read on the
 server and a change placed in the browser agree. Encrypted (PII) properties
-cannot be filtered, sorted or searched in SQL; a list that names one throws.
+are filtered, sorted and searched too, but not in SQL: the store narrows on
+the list's other filters, then the rest runs in memory on the decrypted
+values. A list that sorts or searches a PII field costs the rows its other
+filters admit, so keep at least one non-PII filter on a large list.
 
 ## Frames
 

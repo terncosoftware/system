@@ -101,7 +101,10 @@ const first = await EntityQuery.from(store, ProductSchema).where('name', '=', 'W
 `createdAt` and `updatedAt` sort and compare like properties. Values order as
 `compareListValues` in `@terncosoftware/core/list` does: a missing value last
 ascending, strings case-insensitively and then exactly. A PII property is
-encrypted at rest, so naming one in a filter, sort or search throws.
+encrypted at rest, so SQL cannot read it: a query that filters, sorts or
+searches one narrows in SQL on its other filters, then decrypts the rest and
+filters, sorts and pages it in memory by the same rules. A PII value compares
+as the string it was written as.
 
 A list topic answers its window with `window`, which applies a `ListQuery`
 (list field names are property names, the list key is the record id):
