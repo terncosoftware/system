@@ -9,6 +9,14 @@ import {
 } from "@terncosoftware/core";
 import type { Knex } from "knex";
 import { C, DEFAULT_GRAPH_IRI, type LiteralJson, type NodeKind, T } from "./schema.js";
+import {
+    type CompiledSubjectQuery,
+    compileSubjectQuery,
+    PG_DIALECT,
+    SQLITE_DIALECT,
+    type SubjectQuery,
+    subjectQueryIris,
+} from "./subjectQuery.js";
 
 interface ServerContext extends ApplicationContext {
     trx?: Knex.Transaction;
@@ -993,6 +1001,72 @@ export class TripleStore {
             });
         }
         return result;
+    }
+
+    // ── Subject queries ───────────────────────────────────────────────────────
+
+    /**
+     * One page of the subjects of a type, filtered and sorted in SQL, plus the
+     * number of subjects the filters admit. See subjectQuery.ts for the order
+     * values sort in. Both statements run in one transaction.
+     */
+    async selectSubjects(
+        ctx: ServerContext,
+        query: SubjectQuery,
+    ): Promise<{ subjects: IRI[]; total: number }> {
+        return this.withTransaction(ctx, async (ctx) => {
+            const compiled = await this._compileSubjectQuery(ctx, query);
+            if (compiled === null) {
+                return { subjects: [], total: 0 };
+            }
+            const page = this._rows<{ iri: string }>(
+                await this._db(ctx).raw(compiled.page.sql, [...compiled.page.bindings]),
+            );
+            const count = this._rows<{ total: number | string }>(
+                await this._db(ctx).raw(compiled.count.sql, [...compiled.count.bindings]),
+            );
+            return {
+                subjects: page.map((r) => makeIRI(r.iri)),
+                total: Number(count[0]?.total ?? 0),
+            };
+        });
+    }
+
+    /** How many subjects of a type the query's filters admit; its sort and page are ignored. */
+    async countSubjects(ctx: ServerContext, query: SubjectQuery): Promise<number> {
+        return this.withTransaction(ctx, async (ctx) => {
+            const compiled = await this._compileSubjectQuery(ctx, query);
+            if (compiled === null) {
+                return 0;
+            }
+            const count = this._rows<{ total: number | string }>(
+                await this._db(ctx).raw(compiled.count.sql, [...compiled.count.bindings]),
+            );
+            return Number(count[0]?.total ?? 0);
+        });
+    }
+
+    /** Null when the query's graph was never written, so no subject can match. */
+    private async _compileSubjectQuery(
+        ctx: ServerContext,
+        query: SubjectQuery,
+    ): Promise<CompiledSubjectQuery | null> {
+        let graphId: number | null = null;
+        if ("graph" in query.scope) {
+            graphId = await this._resolveGraph(ctx, query.scope.graph);
+            if (graphId === null) {
+                return null;
+            }
+        }
+        const rdfType = makeIRI(RDF_TYPE);
+        const ids = await this._nodeIds(ctx, subjectQueryIris(query, rdfType));
+        const dialect = this._isPg() ? PG_DIALECT : SQLITE_DIALECT;
+        return compileSubjectQuery(query, rdfType, ids, graphId, dialect);
+    }
+
+    /** The rows of a raw statement: Postgres wraps them, SQLite returns them bare. */
+    private _rows<R>(raw: unknown): R[] {
+        return (Array.isArray(raw) ? raw : (raw as { rows: R[] }).rows) as R[];
     }
 
     // ── Graph reachability ────────────────────────────────────────────────────

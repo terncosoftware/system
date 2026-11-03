@@ -20,6 +20,22 @@ search looks in. `normalizeListQuery` drops anything else, so a client cannot
 reach a column the server did not offer. Rows are flat records of strings,
 numbers, booleans and nulls; dates travel as ISO-8601 UTC strings.
 
+## Reading a window
+
+A list topic over entities reads its window in SQL:
+
+```ts
+read: (ctx, sec, { query }) =>
+    EntityQuery.from(store, Schema).window(ctx, query, LIST_SCHEMA, toRow),
+```
+
+`window` sorts, filters, searches and pages in the store and counts every
+match, so a page costs the rows on it. List fields are the schema's property
+names, plus `createdAt` and `updatedAt`, and the list key is the record id.
+The store orders values as `compareListValues` does, so a page read on the
+server and a change placed in the browser agree. Encrypted (PII) properties
+cannot be filtered, sorted or searched in SQL; a list that names one throws.
+
 ## Frames
 
 On subscribe the topic sends a `window` frame: the page plus a `version`, a

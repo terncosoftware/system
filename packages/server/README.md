@@ -80,21 +80,35 @@ The transaction `ctx` automatically propagates `trx` to all nested store operati
 
 ## EntityQuery
 
-Fluent query builder for filtering and sorting entities.
+Fluent reads of one schema. Every filter, sort, search and page runs in SQL, so a page costs the rows on it.
 
 ```typescript
-import { entities } from '@terncosoftware/server';
+import { EntityQuery } from '@terncosoftware/server';
 
-const results = await entities(store, ProductSchema)
-    .where(priceIRI, '>=', Literal.decimal(10))
-    .orderBy(nameIRI, 'asc')
+const { records, total } = await EntityQuery.from(store, ProductSchema)
+    .where('price', '>=', 10)
+    .whereIn('status', ['active', 'draft'])     // [] matches nothing
+    .search('blue widget', ['name', 'sku'])     // every term in one of the fields, any case
+    .orderBy('price', 'desc')
+    .orderBy('name')                            // breaks ties on price; the IRI breaks the rest
+    .offset(20)
     .limit(20)
-    .offset(0)
-    .all(ctx);
+    .page(ctx);                                 // total counts every match, not the page
 
-const first = await entities(store, ProductSchema)
-    .where(nameIRI, '=', Literal.string('Widget'))
-    .first(ctx);
+const first = await EntityQuery.from(store, ProductSchema).where('name', '=', 'Widget').first(ctx);
+```
+
+`createdAt` and `updatedAt` sort and compare like properties. Values order as
+`compareListValues` in `@terncosoftware/core/list` does: a missing value last
+ascending, strings case-insensitively and then exactly. A PII property is
+encrypted at rest, so naming one in a filter, sort or search throws.
+
+A list topic answers its window with `window`, which applies a `ListQuery`
+(list field names are property names, the list key is the record id):
+
+```typescript
+read: (ctx, sec, { query }) =>
+    EntityQuery.from(store, ProductSchema).window(ctx, query, PRODUCTS_LIST, toRow),
 ```
 
 ## Extension Data
