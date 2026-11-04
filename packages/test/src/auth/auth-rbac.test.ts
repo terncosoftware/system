@@ -27,6 +27,7 @@ import { bindService } from "@terncosoftware/core";
 import { TripleStore } from "@terncosoftware/data";
 import {
     buildServerContext,
+    FieldCipherService,
     PermissionRepository,
     PolicyGrantRepository,
     RbacService,
