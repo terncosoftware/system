@@ -21,12 +21,13 @@
  */
 
 import { UserSchema } from "@terncosoftware/auth";
-import { DEFAULT_GRAPH, IRI } from "@terncosoftware/core";
+import { bindService, DEFAULT_GRAPH, IRI } from "@terncosoftware/core";
 import { TripleStore } from "@terncosoftware/data";
 import { EntitySchema, propIri, toLiteral } from "@terncosoftware/entities";
 import {
     buildServerContext,
     EntityStore,
+    FieldCipherService,
     SCHEMA_VERSION_PREDICATE,
     SchemaRegistry,
     type HydratedRecord,
@@ -37,6 +38,10 @@ import {
 import type { Knex } from "knex";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { assertEmptyStore, createTestDataContext } from "../assertEmptyStore.js";
+import { TEST_CIPHER } from "../auth/testCipher.js";
+
+// Auth PII writes in tests use the same fail-closed cipher contract as production.
+bindService(FieldCipherService, TEST_CIPHER);
 
 // ── Inline schemas ────────────────────────────────────────────────────────────
 // Auth schemas store relationship IRIs as scalar properties rather than
