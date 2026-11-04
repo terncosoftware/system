@@ -32,11 +32,14 @@ import {
 import { bindService } from "@terncosoftware/core";
 import { TripleStore } from "@terncosoftware/data";
 import { FlowContext, type HttpResponseDraft, type ParsedHttpRequest } from "@terncosoftware/flow";
-import { buildServerContext, type ServerContext, systemSec } from "@terncosoftware/server";
+import { buildServerContext, FieldCipherService, type ServerContext, systemSec } from "@terncosoftware/server";
 import type { Knex } from "knex";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { assertEmptyStore, createTestDataContext } from "../assertEmptyStore.js";
 import { TEST_CIPHER } from "./testCipher.js";
+
+// Auth PII writes in tests use the same fail-closed cipher contract as production.
+bindService(FieldCipherService, TEST_CIPHER);
 
 const NEG_CACHE_SENTINEL = "__neg__";
 
