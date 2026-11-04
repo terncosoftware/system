@@ -18,7 +18,7 @@ export const UserSessionSchema = new EntitySchema({
         sessionToken: sessionTokenIRI,
         expiresAt: expiresAtIRI,
         isActive: isActiveIRI,
-        ipAddress: ipAddressIRI,
+        ipAddress: { iri: ipAddressIRI, pii: true },
         sessionUser: sessionUserIRI,
         sessionDevice: sessionDeviceIRI,
     },
