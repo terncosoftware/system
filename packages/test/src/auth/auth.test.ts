@@ -51,6 +51,7 @@ import {
 import {
     buildServerContext,
     EntityStore,
+    FieldCipherService,
     type ServerContext,
     systemSec,
 } from "@terncosoftware/server";
@@ -58,6 +59,9 @@ import type { Knex } from "knex";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { assertEmptyStore, createTestDataContext } from "../assertEmptyStore.js";
 import { TEST_CIPHER } from "./testCipher.js";
+
+// Auth PII writes in tests use the same fail-closed cipher contract as production.
+bindService(FieldCipherService, TEST_CIPHER);
 
 function startServer(
     handler: (req: IncomingMessage, res: ServerResponse) => void,
