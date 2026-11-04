@@ -12,9 +12,9 @@ export const UserDeviceSchema = new EntitySchema({
     typeIRI: UserDeviceIRI,
     ns: AUTH_NS,
     properties: {
-        deviceName: deviceNameIRI,
+        deviceName: { iri: deviceNameIRI, pii: true },
         devicePlatform: devicePlatformIRI,
-        deviceUserAgent: deviceUserAgentIRI,
+        deviceUserAgent: { iri: deviceUserAgentIRI, pii: true },
         deviceUser: deviceUserIRI,
     },
 });
