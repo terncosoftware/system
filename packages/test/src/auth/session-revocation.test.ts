@@ -36,11 +36,14 @@ import {
 import { bindService } from "@terncosoftware/core";
 import { type Knex, TripleStore } from "@terncosoftware/data";
 import { FlowContext, type FlowPort } from "@terncosoftware/flow";
-import { buildServerContext, type ServerContext, systemSec } from "@terncosoftware/server";
+import { buildServerContext, FieldCipherService, type ServerContext, systemSec } from "@terncosoftware/server";
 import { Redis } from "ioredis";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { assertEmptyStore, createTestDataContext } from "../assertEmptyStore.js";
 import { TEST_CIPHER } from "./testCipher.js";
+
+// Auth PII writes in tests use the same fail-closed cipher contract as production.
+bindService(FieldCipherService, TEST_CIPHER);
 
 // Postgres-only: skipped (and reported as skipped) when SYS_PG_URL is unset.
 const PG_URL = process.env.SYS_PG_URL ?? "";
