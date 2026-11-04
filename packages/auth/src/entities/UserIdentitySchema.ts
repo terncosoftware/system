@@ -16,9 +16,10 @@ export const UserIdentitySchema = new EntitySchema({
     ns: AUTH_NS,
     properties: {
         provider: providerIRI,
-        providerUserId: providerUserIdIRI,
-        providerEmail: providerEmailIRI,
-        // accessToken / refreshToken are at-rest PII (TRN-194 / closes TRN-169):
+        // Stable provider identifiers and emails are personal data too.
+        providerUserId: { iri: providerUserIdIRI, pii: true },
+        providerEmail: { iri: providerEmailIRI, pii: true },
+        // accessToken / refreshToken are secrets and are encrypted at rest:
         // EntityStore encrypts them on write and decrypts on read, so the nodes
         // table holds ciphertext while repo callers see cleartext.
         accessToken: { iri: accessTokenIRI, pii: true },
