@@ -23,6 +23,7 @@ import {
     UserRepository,
     UserSessionRepository,
 } from "@terncosoftware/auth";
+import { bindService } from "@terncosoftware/core";
 import { TripleStore } from "@terncosoftware/data";
 import {
     buildServerContext,
@@ -43,6 +44,9 @@ import type { Knex } from "knex";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { assertEmptyStore, createTestDataContext } from "../assertEmptyStore.js";
 import { TEST_CIPHER } from "./testCipher.js";
+
+// Auth PII writes in tests use the same fail-closed cipher contract as production.
+bindService(FieldCipherService, TEST_CIPHER);
 
 // ── Provider matrix ───────────────────────────────────────────────────────────
 
