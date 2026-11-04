@@ -44,6 +44,7 @@ if (process.env.SYS_PG_URL) {
     });
 }
 
+const EMAIL = "ada@example.com";
 const ACCESS = "super-secret-access-token-AAA";
 const REFRESH = "super-secret-refresh-token-BBB";
 const DISPLAY = "Ada Lovelace PII Marker";
@@ -74,7 +75,7 @@ for (const db of providers) {
         it("stores PII as ciphertext at rest but hydrates cleartext", async () => {
             const ctx = buildServerContext(store, { trx });
             const user = await users.create(ctx, systemSec, {
-                email: "ada@example.com",
+                email: EMAIL,
                 displayName: DISPLAY,
                 avatarUrl: AVATAR,
             });
@@ -82,7 +83,7 @@ for (const db of providers) {
                 userId: user.id,
                 provider: "google",
                 providerUserId: "sub-ada-1",
-                providerEmail: "ada@example.com",
+                providerEmail: EMAIL,
                 accessToken: ACCESS,
                 refreshToken: REFRESH,
             });
@@ -91,6 +92,7 @@ for (const db of providers) {
             const raw = JSON.stringify(await store.findAcrossTenants(ctx, {}));
             expect(raw).not.toContain(ACCESS);
             expect(raw).not.toContain(REFRESH);
+            expect(raw).not.toContain(EMAIL);
             expect(raw).not.toContain(DISPLAY);
             expect(raw).not.toContain(AVATAR);
             expect(raw).toContain("v1:");
