@@ -14,7 +14,6 @@ export {
     useListTopic,
     useSnapshotTopic,
     useTileCommands,
-    useTileRefresh,
 } from "./hooks.js";
 export { type ListColumn, ListTable, type ListTableProps } from "./ListTable.js";
 export {

@@ -13,12 +13,18 @@ export interface TopicSubscription {
 
 export interface TopicListener {
     frame(frame: TopicFrame): void;
+    /** The topic cannot be read. */
     error(message: string): void;
+    /**
+     * The connection dropped and the host is bringing it back. Not an error:
+     * the view keeps what it holds, and the next frame brings it up to date.
+     */
+    reconnecting(): void;
 }
 
 export interface TopicHandle {
-    /** Read the topic again: with a new query for a list, as it stands for anything else. */
-    update(query: ListQuery | null): void;
+    /** Ask a list view for a different page, order or filter. */
+    update(query: ListQuery): void;
     close(): void;
 }
 

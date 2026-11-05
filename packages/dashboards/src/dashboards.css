@@ -69,7 +69,7 @@
     padding: 8px 16px 16px;
 }
 
-:where(.dboard-tile-action, .dboard-tile-resize) {
+:where(.dboard-tile-resize) {
     display: inline-grid;
     place-items: center;
     padding: 0;
@@ -80,12 +80,7 @@
     cursor: pointer;
 }
 
-:where(.dboard-tile-action) {
-    width: 32px;
-    height: 32px;
-}
-
-:where(.dboard-tile-action svg, .dboard-tile-resize svg) {
+:where(.dboard-tile-resize svg) {
     width: 16px;
     height: 16px;
     fill: none;
@@ -95,7 +90,7 @@
     stroke-linejoin: round;
 }
 
-:where(.dboard-tile-action:hover, .dboard-tile-resize:hover) {
+:where(.dboard-tile-resize:hover) {
     background: var(--dboard-surface-2);
     color: var(--dboard-text);
 }
@@ -123,6 +118,24 @@
 :where(.dboard-tile-error, .dboard-error, .dboard-list-error) {
     margin: 8px 16px 0;
     color: var(--dboard-danger);
+    font-size: 13px;
+}
+
+/*
+ * The connection state is not an error: neutral, and announced politely. The
+ * region stays in the page so it is heard when it fills; while empty it sits
+ * out of the layout.
+ */
+:where(.dboard-list-status:empty) {
+    position: absolute;
+}
+
+:where(.dboard-list-status:not(:empty)) {
+    margin: 0;
+    padding: 6px 10px;
+    color: var(--dboard-text-2);
+    background: var(--dboard-surface-2);
+    border-radius: 6px;
     font-size: 13px;
 }
 

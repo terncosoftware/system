@@ -52,6 +52,7 @@ export class FeedTopicView<T> {
                     }
                 },
                 error: (message) => this._set({ status: "error", error: message, fresh: [] }),
+                reconnecting: () => this._set({ status: "reconnecting", error: null, fresh: [] }),
             },
         );
     }
@@ -59,11 +60,6 @@ export class FeedTopicView<T> {
     stop(): void {
         this._handle?.close();
         this._handle = null;
-    }
-
-    /** Read the latest items again. */
-    refresh(): void {
-        this._handle?.update(null);
     }
 
     private _onFrame(frame: FeedFrame<T>): void {

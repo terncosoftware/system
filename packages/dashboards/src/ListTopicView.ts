@@ -71,6 +71,7 @@ export class ListTopicView<T extends ListRow = ListRow> {
             {
                 frame: (frame) => this._onFrame(frame as ListFrame<T>),
                 error: (message) => this._set({ status: "error", error: message, changed: [] }),
+                reconnecting: () => this._set({ status: "reconnecting", error: null, changed: [] }),
             },
         );
     }
@@ -84,11 +85,6 @@ export class ListTopicView<T extends ListRow = ListRow> {
     setQuery(query: ListQuery): void {
         this._requeried = true;
         this._read(query);
-    }
-
-    /** Read the current page again. */
-    refresh(): void {
-        this._read(this._snapshot.query);
     }
 
     private _read(query: ListQuery): void {
@@ -105,7 +101,7 @@ export class ListTopicView<T extends ListRow = ListRow> {
         }
         const next = applyListFrame(this._state, frame, this._snapshot.query, this._schema);
         if (next === null) {
-            this.refresh();
+            this._read(this._snapshot.query);
             return;
         }
         if (next === this._state) {

@@ -1,7 +1,8 @@
 import type { SnapshotFrame, TopicParams } from "@terncosoftware/core/topics";
 import type { TopicHandle, TopicSource } from "./TopicSource.js";
 
-export type TopicViewStatus = "loading" | "live" | "error";
+/** `reconnecting` is not an error: what the view holds stays until the next frame. */
+export type TopicViewStatus = "loading" | "live" | "reconnecting" | "error";
 
 export interface SnapshotViewState<T> {
     readonly status: TopicViewStatus;
@@ -46,6 +47,7 @@ export class SnapshotTopicView<T> {
                     }
                 },
                 error: (message) => this._set({ status: "error", error: message }),
+                reconnecting: () => this._set({ status: "reconnecting", error: null }),
             },
         );
     }
@@ -53,11 +55,6 @@ export class SnapshotTopicView<T> {
     stop(): void {
         this._handle?.close();
         this._handle = null;
-    }
-
-    /** Read the value again. */
-    refresh(): void {
-        this._handle?.update(null);
     }
 
     private _onFrame(frame: SnapshotFrame<T>): void {

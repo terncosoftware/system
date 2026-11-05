@@ -34,6 +34,7 @@ export class MemoryTopicSource implements TopicSource {
     private readonly _snapshots = new Map<string, unknown>();
     private readonly _feeds = new Map<string, HeldFeed>();
     private readonly _views = new Set<OpenView>();
+    private _connected = true;
 
     open(subscription: TopicSubscription, listener: TopicListener): TopicHandle {
         const { topic } = subscription;
@@ -43,11 +44,17 @@ export class MemoryTopicSource implements TopicSource {
         }
         const view: OpenView = { topic, query: subscription.query, listener };
         this._views.add(view);
-        this._send(view);
+        if (this._connected) {
+            this._send(view);
+        } else {
+            listener.reconnecting();
+        }
         return {
             update: (query) => {
                 view.query = query;
-                this._send(view);
+                if (this._connected) {
+                    this._send(view);
+                }
             },
             close: () => {
                 this._views.delete(view);
@@ -62,7 +69,7 @@ export class MemoryTopicSource implements TopicSource {
         if (held === undefined) {
             return;
         }
-        for (const view of this._viewsOf(topic)) {
+        for (const view of this._reachable(topic)) {
             if (view.query === null) {
                 continue;
             }
@@ -79,7 +86,7 @@ export class MemoryTopicSource implements TopicSource {
 
     setSnapshot(topic: string, value: unknown): void {
         this._snapshots.set(topic, value);
-        for (const view of this._viewsOf(topic)) {
+        for (const view of this._reachable(topic)) {
             view.listener.frame(snapshotFrame(value));
         }
     }
@@ -87,7 +94,7 @@ export class MemoryTopicSource implements TopicSource {
     /** Replace a feed's items, newest first. */
     setFeed(topic: string, schema: FeedSchema, items: readonly unknown[]): void {
         this._feeds.set(topic, { schema, items });
-        for (const view of this._viewsOf(topic)) {
+        for (const view of this._reachable(topic)) {
             this._send(view);
         }
     }
@@ -100,8 +107,27 @@ export class MemoryTopicSource implements TopicSource {
         }
         const frame = { type: "items", reset: false, items } as const;
         held.items = applyFeedFrame(held.items, frame, held.schema);
-        for (const view of this._viewsOf(topic)) {
+        for (const view of this._reachable(topic)) {
             view.listener.frame(frame);
+        }
+    }
+
+    /**
+     * Drop the connection the way a lost network would: every open view hears
+     * it is reconnecting, and nothing reaches them until `reconnect`.
+     */
+    disconnect(): void {
+        this._connected = false;
+        for (const view of this._views) {
+            view.listener.reconnecting();
+        }
+    }
+
+    /** Bring the connection back, sending every open view the topic as it now stands. */
+    reconnect(): void {
+        this._connected = true;
+        for (const view of this._views) {
+            this._send(view);
         }
     }
 
@@ -112,6 +138,11 @@ export class MemoryTopicSource implements TopicSource {
 
     private _viewsOf(topic: string): OpenView[] {
         return [...this._views].filter((view) => view.topic === topic);
+    }
+
+    /** The views on a topic that a change can reach now: none while disconnected. */
+    private _reachable(topic: string): OpenView[] {
+        return this._connected ? this._viewsOf(topic) : [];
     }
 
     private _send(view: OpenView): void {
