@@ -23,16 +23,12 @@ export const DashboardCommands = {
     configureTile: "dashboard.tile.configure",
     /** Drop the viewer's preferences for a tile. */
     resetTile: "dashboard.tile.reset",
-    /** Ask a tile to read its data again. */
-    refreshTile: "dashboard.tile.refresh",
 } as const;
 
 /** Events a dashboard raises. */
 export const DashboardEvents = {
     /** A tile's size or settings changed, carrying its new state. */
     tileChanged: "dashboard.tile.changed",
-    /** A tile was asked to read its data again. */
-    tileRefreshRequested: "dashboard.tile.refresh-requested",
 } as const;
 
 declare module "@terncosoftware/core-ui" {
@@ -40,10 +36,8 @@ declare module "@terncosoftware/core-ui" {
         "dashboard.tile.resize": ResizeTileArgs;
         "dashboard.tile.configure": ConfigureTileArgs;
         "dashboard.tile.reset": TileAddress;
-        "dashboard.tile.refresh": TileAddress;
     }
     interface SystemEvents {
         "dashboard.tile.changed": TileState;
-        "dashboard.tile.refresh-requested": TileAddress;
     }
 }

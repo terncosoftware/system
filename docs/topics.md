@@ -43,3 +43,9 @@ hooks: `useListTopic`, `useSnapshotTopic` and `useFeedTopic`. `ListTable` draws
 rows under sortable headers and turns them into labelled cards in a narrow
 container; `ListTile` binds it to a list topic. `MemoryTopicSource` serves all
 three kinds from memory for tests and previews.
+
+Tiles have no refresh: a topic keeps every view current. When the host's
+connection drops it calls the listener's `reconnecting()`, not `error()`. The
+view keeps what it holds, its status reads `reconnecting`, and the next frame
+after the host reconnects brings it up to date. `ListTile` says so in a neutral
+`role="status"` line, apart from its error slot.

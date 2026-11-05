@@ -171,13 +171,6 @@ export class DashboardRuntime {
         dispatch.register<TileAddress>(DashboardCommands.resetTile, async (args) => {
             await this._find(args).update(args.tileId, null);
         });
-        dispatch.register<TileAddress>(DashboardCommands.refreshTile, (args) => {
-            this._find(args);
-            dispatch.event(DashboardEvents.tileRefreshRequested, {
-                dashboardId: args.dashboardId,
-                tileId: args.tileId,
-            });
-        });
     }
 
     get dispatch(): Dispatch {

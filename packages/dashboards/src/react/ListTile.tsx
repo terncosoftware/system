@@ -78,6 +78,8 @@ function nextSort(current: readonly ListSort[], field: string): ListSort[] {
 
 const COUNT = new Intl.NumberFormat();
 
+const RECONNECTING = "Reconnecting. This fills in again as soon as the connection is back.";
+
 /**
  * The reference tile: a live table over a list topic.
  *
@@ -193,6 +195,15 @@ export function ListTile<T extends ListRow>(props: ListTileProps<T>): React.Reac
                     </label>
                 )}
             </div>
+
+            {/* Always in the page, so a polite reader hears it fill. Not an error. */}
+            <p
+                className="dboard-list-status"
+                role="status"
+                data-testid={`dashboard-list-status-${tile.tileId}`}
+            >
+                {live.status === "reconnecting" ? RECONNECTING : null}
+            </p>
 
             {(failed ?? live.error) && (
                 <p className="dboard-list-error" role="alert">

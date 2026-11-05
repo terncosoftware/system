@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import type { ListSchema } from "@terncosoftware/core/list";
 import { InMemoryDispatch } from "@terncosoftware/core-ui";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DashboardRuntime } from "../DashboardRuntime.js";
@@ -215,6 +215,46 @@ describe(ListTile, () => {
             }),
         );
         await vi.waitFor(() => expect(names("admins")).toEqual(["Ada"]));
+    });
+
+    it("draws no refresh control: the topic keeps every tile current", async () => {
+        mount();
+        await screen.findAllByTestId("dashboard-list-row-recent");
+        const frame = screen.getByTestId("dashboard-tile-recent");
+        expect(frame.querySelector(".dboard-tile-header button")).toBeNull();
+        expect(within(frame).queryByRole("button", { name: /refresh/i })).toBeNull();
+        expect(screen.queryByTestId("dashboard-tile-refresh-recent")).toBeNull();
+    });
+
+    it("says it is reconnecting as a neutral status, not an error, and keeps its rows", async () => {
+        mount();
+        await screen.findAllByTestId("dashboard-list-row-recent");
+        const status = screen.getByTestId("dashboard-list-status-recent");
+        expect(status.getAttribute("role")).toBe("status");
+        expect(status.textContent).toBe("");
+
+        act(() => source.disconnect());
+
+        expect(status.textContent).toBe(
+            "Reconnecting. This fills in again as soon as the connection is back.",
+        );
+        expect(status.className).toBe("dboard-list-status");
+        const tile = screen.getByTestId("dashboard-list-recent");
+        expect(within(tile).queryByRole("alert")).toBeNull();
+        expect(tile.querySelector(".dboard-list-error")).toBeNull();
+        expect(names("recent")).toEqual(["Edsger", "Alan", "Grace"]);
+
+        // A change made while the connection is down arrives when it is back.
+        source.setList(TOPIC, schema, [
+            ...source.rows(TOPIC),
+            member("5", "Barbara", "2026-05-01T00:00:00Z"),
+        ]);
+        expect(names("recent")).toEqual(["Edsger", "Alan", "Grace"]);
+        act(() => source.reconnect());
+
+        expect(status.textContent).toBe("");
+        expect(names("recent")).toEqual(["Barbara", "Edsger", "Alan"]);
+        expect(screen.getByTestId("dashboard-list-total-recent").textContent).toBe("5");
     });
 
     it("closes its topic view when the dashboard goes away", async () => {

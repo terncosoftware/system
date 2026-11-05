@@ -46,9 +46,10 @@ const KEY_STEPS: Record<string, TileSize> = {
 };
 
 /**
- * The chrome around every tile: its title, a refresh action, and a resize
- * handle that works by pointer drag or by arrow keys. The new size is sent as
- * a command, so the frame never decides it alone.
+ * The chrome around every tile: its title and a resize handle that works by
+ * pointer drag or by arrow keys. The new size is sent as a command, so the
+ * frame never decides it alone. There is nothing to refresh: a tile's topic
+ * keeps it current.
  */
 export function TileFrame(props: TileFrameProps): React.ReactElement {
     const { tile, limits, columns, children } = props;
@@ -133,15 +134,6 @@ export function TileFrame(props: TileFrameProps): React.ReactElement {
         }
     };
 
-    const onRefresh = async (): Promise<void> => {
-        try {
-            setFailed(null);
-            await commands.refresh();
-        } catch (err) {
-            setFailed(err instanceof Error ? err.message : String(err));
-        }
-    };
-
     const titleId = `dboard-tile-title-${tile.dashboardId}-${tile.tileId}`;
     return (
         <article
@@ -160,17 +152,6 @@ export function TileFrame(props: TileFrameProps): React.ReactElement {
                 <h2 className="dboard-tile-title" id={titleId}>
                     {tile.title}
                 </h2>
-                <button
-                    type="button"
-                    className="dboard-tile-action"
-                    onClick={onRefresh}
-                    aria-label={`Refresh ${tile.title}`}
-                    data-testid={`dashboard-tile-refresh-${tile.tileId}`}
-                >
-                    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-                        <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3" />
-                    </svg>
-                </button>
             </header>
             {failed && (
                 <p className="dboard-tile-error" role="alert">

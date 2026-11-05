@@ -3,7 +3,7 @@ import { type FeedSchema, type TopicParams, topicAddress } from "@terncosoftware
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import { FeedTopicView, type FeedViewState } from "../FeedTopicView.js";
 import { ListTopicView, type ListViewSnapshot } from "../ListTopicView.js";
-import { DashboardCommands, DashboardEvents } from "../messages.js";
+import { DashboardCommands } from "../messages.js";
 import type { TileSettings, TileSize, TileState } from "../model.js";
 import { SnapshotTopicView, type SnapshotViewState } from "../SnapshotTopicView.js";
 import { useDashboardHost } from "./context.js";
@@ -12,7 +12,6 @@ export interface TileCommands {
     resize(size: TileSize): Promise<void>;
     configure(settings: TileSettings): Promise<void>;
     reset(): Promise<void>;
-    refresh(): Promise<void>;
 }
 
 /** The dashboard commands, bound to one tile. */
@@ -36,43 +35,17 @@ export function useTileCommands(tile: TileState): TileCommands {
         () => dispatch.command(DashboardCommands.resetTile).exec({ dashboardId, tileId }),
         [dispatch, dashboardId, tileId],
     );
-    const refresh = useCallback(
-        () => dispatch.command(DashboardCommands.refreshTile).exec({ dashboardId, tileId }),
-        [dispatch, dashboardId, tileId],
-    );
-    return { resize, configure, reset, refresh };
-}
-
-/** Run `onRefresh` whenever this tile is asked to read its data again. */
-export function useTileRefresh(tile: TileState, onRefresh: () => void): void {
-    const { runtime } = useDashboardHost();
-    const { dashboardId, tileId } = tile;
-    useEffect(
-        () =>
-            runtime.dispatch.on(DashboardEvents.tileRefreshRequested, (address) => {
-                if (address.dashboardId === dashboardId && address.tileId === tileId) {
-                    onRefresh();
-                }
-            }),
-        [runtime, dashboardId, tileId, onRefresh],
-    );
+    return { resize, configure, reset };
 }
 
 const NO_PARAMS: TopicParams = {};
 
-/** Start a view while the tile is mounted, and read it again when the tile is refreshed. */
-function useLiveView(
-    tile: TileState,
-    view: { start(): void; stop(): void; refresh(): void },
-): void {
+/** Hold a view open while the tile is mounted. The topic keeps it current. */
+function useLiveView(view: { start(): void; stop(): void }): void {
     useEffect(() => {
         view.start();
         return () => view.stop();
     }, [view]);
-    useTileRefresh(
-        tile,
-        useCallback(() => view.refresh(), [view]),
-    );
 }
 
 export interface UseListTopicArgs {
@@ -99,7 +72,7 @@ export function useListTopic<T extends ListRow>(
         () => new ListTopicView<T>(topics, topic, view, params, schema, query),
         [topics, address, view],
     );
-    useLiveView(tile, live);
+    useLiveView(live);
 
     const queryKey = JSON.stringify(query);
     useEffect(() => {
@@ -130,7 +103,7 @@ export function useSnapshotTopic<T>(
         () => new SnapshotTopicView<T>(topics, topic, view, params),
         [topics, address, view],
     );
-    useLiveView(tile, live);
+    useLiveView(live);
     return useSyncExternalStore(live.subscribe, live.state, live.state);
 }
 
@@ -151,6 +124,6 @@ export function useFeedTopic<T>(tile: TileState, args: UseFeedTopicArgs): FeedVi
         () => new FeedTopicView<T>(topics, topic, view, params, schema),
         [topics, address, view],
     );
-    useLiveView(tile, live);
+    useLiveView(live);
     return useSyncExternalStore(live.subscribe, live.state, live.state);
 }

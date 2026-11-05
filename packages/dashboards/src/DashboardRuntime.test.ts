@@ -93,19 +93,9 @@ describe(DashboardRuntime, () => {
         await runtime.mount(definition, "u1");
         await expect(
             dispatch
-                .command(DashboardCommands.refreshTile)
+                .command(DashboardCommands.resetTile)
                 .exec({ dashboardId: "overview", tileId: "missing" }),
         ).rejects.toThrow(/No tile "missing"/);
-    });
-
-    it("relays a refresh to the tile as an event", async () => {
-        await runtime.mount(definition, "u1");
-        const asked: string[] = [];
-        dispatch.on(DashboardEvents.tileRefreshRequested, (address) => asked.push(address.tileId));
-        await dispatch
-            .command(DashboardCommands.refreshTile)
-            .exec({ dashboardId: "overview", tileId: "right" });
-        expect(asked).toEqual(["right"]);
     });
 
     it("rejects a tile type without a provider prefix", () => {
