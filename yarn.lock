@@ -1924,12 +1924,6 @@ __metadata:
     "@types/better-sqlite3": "npm:^7.6.12"
     better-sqlite3: "npm:^11.10.0"
     knex: "npm:^3.1.0"
-  peerDependencies:
-    better-sqlite3: ^11.0.0
-    pg: ^8.0.0
-  peerDependenciesMeta:
-    pg:
-      optional: true
   languageName: unknown
   linkType: soft
 
@@ -2119,14 +2113,6 @@ __metadata:
     "@azure/keyvault-secrets": "npm:^4.8.0"
     "@terncosoftware/core": "workspace:^"
     "@types/node": "npm:^22.0.0"
-  peerDependencies:
-    "@azure/identity": ^4.0.0
-    "@azure/keyvault-secrets": ^4.0.0
-  peerDependenciesMeta:
-    "@azure/identity":
-      optional: true
-    "@azure/keyvault-secrets":
-      optional: true
   languageName: unknown
   linkType: soft
 
