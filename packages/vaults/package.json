@@ -37,17 +37,5 @@
     },
     "devDependencies": {
         "@types/node": "^22.0.0"
-    },
-    "peerDependencies": {
-        "@azure/identity": "^4.0.0",
-        "@azure/keyvault-secrets": "^4.0.0"
-    },
-    "peerDependenciesMeta": {
-        "@azure/identity": {
-            "optional": true
-        },
-        "@azure/keyvault-secrets": {
-            "optional": true
-        }
     }
 }

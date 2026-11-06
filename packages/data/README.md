@@ -58,7 +58,7 @@ await knex.transaction(async (trx) => {
 | `sqlite` | `better-sqlite3` | Development, tests, single-process deployments |
 | `pg` | `pg` | Production; required for multi-instance deployments |
 
-Both drivers are peer dependencies — install whichever you need:
+Install the driver for the client you use; knex loads it by name:
 
 ```bash
 yarn add better-sqlite3   # SQLite
