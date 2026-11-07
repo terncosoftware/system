@@ -12,6 +12,11 @@ import {
     type PgSession,
 } from "./migrations/005_nodes_value_index.js";
 import { up as migrate006 } from "./migrations/006_statement_timestamps.js";
+import {
+    isPresent as hasUniqueTermIndexes,
+    up as migrate007,
+    upConcurrently as migrate007Concurrently,
+} from "./migrations/007_unique_term_nodes.js";
 import { C, T } from "./schema.js";
 
 const log = getLog("sys:data:migrate");
@@ -115,6 +120,13 @@ const DATA_MIGRATIONS: readonly DataMigration[] = [
         name: "006_statement_timestamps",
         up: migrate006,
         isPresent: statementTimestampsPresent,
+    },
+    {
+        name: "007_unique_term_nodes",
+        up: migrate007,
+        upConcurrently: migrate007Concurrently,
+        isPresent: async (knex) =>
+            (await hasTables(knex, [T.nodes])) && (await hasUniqueTermIndexes(knex, isPg(knex))),
     },
 ];
 

@@ -505,23 +505,11 @@ export class TripleStore {
 
     private async _ensureNode(ctx: ServerContext, term: RdfTerm): Promise<number> {
         if (isIRI(term)) {
-            const row = await this._db(ctx)(T.nodes)
-                .where({ [C.kind]: "iri", [C.iri]: term.value })
-                .first<NodeRow>();
-            if (row) {
-                return row.id;
-            }
-            return this._insert(ctx, T.nodes, { [C.kind]: "iri", [C.iri]: term.value });
+            return this._intern(ctx, "iri", C.iri, term.value);
         }
 
         if (term.termType === "BlankNode") {
-            const row = await this._db(ctx)(T.nodes)
-                .where({ [C.kind]: "blank", [C.blankId]: term.id })
-                .first<NodeRow>();
-            if (row) {
-                return row.id;
-            }
-            return this._insert(ctx, T.nodes, { [C.kind]: "blank", [C.blankId]: term.id });
+            return this._intern(ctx, "blank", C.blankId, term.id);
         }
 
         // A literal gets a node of its own; see the class comment.
@@ -538,6 +526,39 @@ export class TripleStore {
             [C.isEncrypted]: encrypted,
             [C.keyId]: encrypted ? term.keyId : null,
         });
+    }
+
+    /**
+     * The one node for an IRI or a blank node id, inserting it when there is none.
+     *
+     * Another process can intern the same term between the read and the insert.
+     * The per-kind unique index (migration 007) refuses its second row, the
+     * insert waits for that process's transaction and then does nothing, and
+     * the read after it returns the row that won.
+     */
+    private async _intern(
+        ctx: ServerContext,
+        kind: "iri" | "blank",
+        column: string,
+        value: string,
+    ): Promise<number> {
+        const find = () =>
+            this._db(ctx)(T.nodes)
+                .where({ [C.kind]: kind, [column]: value })
+                .first<NodeRow>();
+        const found = await find();
+        if (found) {
+            return found.id;
+        }
+        await this._db(ctx).raw(
+            `INSERT INTO ${T.nodes} (${C.kind}, ${column}) VALUES (?, ?) ON CONFLICT (${column}) WHERE ${C.kind} = '${kind}' DO NOTHING`,
+            [kind, value],
+        );
+        const row = await find();
+        if (!row) {
+            throw new Error(`TripleStore: interning ${kind} ${value} left no node`);
+        }
+        return row.id;
     }
 
     // ── Write ─────────────────────────────────────────────────────────────────
